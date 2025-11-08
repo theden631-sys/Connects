@@ -1,0 +1,1122 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1" />
+  <title>Connections</title>
+  <style>
+    html,body,#root { height:100%; margin:0; background: transparent; }
+    body { -webkit-font-smoothing: antialiased; font-family: -apple-system, system-ui, "Segoe UI", Roboto, sans-serif; }
+    canvas { background: #000; border-radius: 22px; box-shadow: 0 10px 30px rgba(0,0,0,.35); }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <!-- React + Babel (dev friendly). For production, prebuild and drop Babel. -->
+  <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+  <script type="text/babel">
+
+// === BEGIN: your working React component (single-file) ===
+// Paste the whole file you currently have open in canvas, exactly as-is.
+// Then add two tiny hooks:
+//  1) call window.webkit.messageHandlers.hud?.postMessage({score,best,moves})
+//     whenever these values change,
+//  2) expose window.GameAPI.newGame = () => newGame() to allow native button to trigger reset.
+
+
+/* ---------------- PASTE BELOW THIS LINE ---------------- */
+
+const { useEffect, useMemo, useRef, useState } = React;
+
+// Match‑3 Canvas Game – React single‑file (Plain JS, no TypeScript)
+// Features:
+// - Stripes (row/col) on 4‑matches; Bombs (3×3) on 5+
+// - Cascades: gravity + refill until stable
+// - Auto‑shuffle when stuck (no valid moves)
+// - Levels with layout masks (blocked cells) — Checker level removed per request
+// - Color‑blind safe palette (Okabe‑Ito)
+// - Move limit: 25
+// - **Keyed connections**: tiles connect only if facing-side keys align; matches can bend (L/zig‑zag)
+// - Idle hint: after 10s, highlight a valid swap
+// - Internal tests to prevent regressions
+
+// ---------------- Types (JS comments) ----------------
+// SideKeys = { u:boolean, r:boolean, d:boolean, l:boolean }
+// Special  = "none" | "stripeH" | "stripeV" | "bomb"
+// Cell     = { type:number, id:number, special:Special, keys:SideKeys }
+// RC       = { r:number, c:number }
+// Group    = { dir:"row"|"col", cells:RC[] }
+// Level    = { name:string, size:number, mask:(r,c)=>boolean }
+
+function Match3CanvasGame() {
+  // --- Tunables ---
+  const TILE = 48; // px per tile (reduced from 56 to fit better)
+  const PADDING = 16; // canvas padding
+  const TYPES = 6; // base tile kinds
+  const DEFAULT_MOVES = 25;
+  const BLOCK = -2; // blocked/impassable cell marker
+
+  // Levels: mask(r,c) => playable?
+  const LEVELS = [
+    { name: "Classic", size: 8, mask: () => true },
+    {
+      name: "Donut",
+      size: 9,
+      mask: (r, c) => {
+        const n = 9;
+        const edge = r === 0 || c === 0 || r === n - 1 || c === n - 1;
+        const inner = r >= 2 && r <= n - 3 && c >= 2 && c <= n - 3;
+        return !edge && !(inner && (r === 4 || c === 4));
+      },
+    },
+    { name: "Plus", size: 8, mask: (r, c) => r === 3 || r === 4 || c === 3 || c === 4 },
+  ];
+
+  const [levelIndex, setLevelIndex] = useState(0);
+  const level = LEVELS[levelIndex];
+  const [size, setSize] = useState(level.size);
+  const [moves, setMoves] = useState(DEFAULT_MOVES);
+  const [score, setScore] = useState(0);
+  const [best, setBest] = useState(0);
+  const [board, setBoard] = useState(() => makeFreshBoard(level, TYPES, BLOCK));
+  const [selected, setSelected] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [soundOn, setSoundOn] = useState(true);
+  const [justShuffled, setJustShuffled] = useState(false);
+  const canvasRef = useRef(null);
+  const dpr = typeof window !== "undefined" ? window.devicePixelRatio || 1 : 1;
+  const lastSwapRef = useRef(null);
+  const [lastActionAt, setLastActionAt] = useState(() => Date.now());
+  const [hintCells, setHintCells] = useState(null);
+  // tiny animation clock for playful pulses
+  const [tick, setTick] = useState(0);
+  useEffect(() => {
+    let raf;
+    const loop = () => { setTick((t) => (t + 1) % 6000); raf = requestAnimationFrame(loop); };
+    raf = requestAnimationFrame(loop);
+    return () => cancelAnimationFrame(raf);
+  }, []);
+
+  // WebAudio minimal beeps
+  const audioCtxRef = useRef(null);
+  const ensureAudio = () => {
+    if (!soundOn) return;
+    if (!audioCtxRef.current) {
+      const Ctx = (window && (window.AudioContext || window.webkitAudioContext));
+      if (Ctx) audioCtxRef.current = new Ctx();
+    }
+  };
+  const beep = (freq = 440, dur = 0.06, gain = 0.03) => {
+    if (!soundOn) return;
+    const ctx = audioCtxRef.current;
+    if (!ctx) return;
+    const t = ctx.currentTime;
+    const o = ctx.createOscillator();
+    const g = ctx.createGain();
+    o.type = "sine";
+    o.frequency.setValueAtTime(freq, t);
+    g.gain.setValueAtTime(gain, t);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    o.connect(g);
+    g.connect(ctx.destination);
+    o.start(t);
+    o.stop(t + dur);
+  };
+
+  // Canvas sizing
+  const logicalSize = useMemo(() => PADDING * 2 + size * TILE, [size]);
+
+  function newGame(newLevelIndex = levelIndex) {
+    const lvl = LEVELS[newLevelIndex];
+    setLevelIndex(newLevelIndex);
+    setSize(lvl.size);
+    const fresh = makeFreshBoard(lvl, TYPES, BLOCK);
+    if (!isValidBoard(fresh, lvl.size)) {
+      console.error("Init produced invalid board; falling back to classic 8x8.");
+      const fallback = makeFreshBoard(LEVELS[0], TYPES, BLOCK);
+      setBoard(fallback);
+    } else {
+      setBoard(fresh);
+    }
+    setMoves(DEFAULT_MOVES);
+    setScore(0);
+    setBest(0);
+    setSelected(null);
+    setBusy(false);
+    setJustShuffled(false);
+    setHintCells(null);
+    setLastActionAt(Date.now());
+    // Send HUD update to Swift
+    try {
+      if (window.webkit?.messageHandlers?.hud) {
+        window.webkit.messageHandlers.hud.postMessage({ score: 0, best: 0, moves: DEFAULT_MOVES });
+      }
+    } catch (e) {
+      console.error("Error sending HUD update:", e);
+    }
+  }
+
+  // Drawing
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const dim = logicalSize;
+    canvas.width = Math.floor(dim * dpr);
+    canvas.height = Math.floor(dim * dpr);
+    canvas.style.width = dim + "px";
+    canvas.style.height = dim + "px";
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+    // background (brighter & relaxing)
+    const bg = ctx.createLinearGradient(0, 0, dim, dim);
+    bg.addColorStop(0, "#0e2a47");   // deep teal
+    bg.addColorStop(1, "#1b2f66");   // indigo-teal mix
+    ctx.fillStyle = bg;
+    ctx.fillRect(0, 0, dim, dim);
+
+    // board panel
+    roundRect(ctx, PADDING - 6, PADDING - 6, size * TILE + 12, size * TILE + 12, 18);
+    const panel = ctx.createLinearGradient(PADDING, PADDING, PADDING + size * TILE, PADDING + size * TILE);
+    panel.addColorStop(0, "rgba(19, 38, 74, 0.85)");
+    panel.addColorStop(1, "rgba(19, 54, 96, 0.85)");
+    ctx.fillStyle = panel;
+    ctx.fill();
+
+    // HUD
+    drawHUD(ctx, score, moves, best, dim);
+
+    // tiles
+    for (let r = 0; r < size; r++) {
+      for (let c = 0; c < size; c++) {
+        const cell = board[r] && board[r][c];
+        const x = PADDING + c * TILE;
+        const y = PADDING + r * TILE;
+        if (!cell) continue;
+        drawTile(ctx, x, y, TILE, cell, BLOCK);
+        if (selected && selected.r === r && selected.c === c && cell.type >= 0) {
+          const phase = (tick % 60) / 60;
+          const pulse = 0.35 + 0.25 * Math.sin(phase * Math.PI * 2);
+          ctx.save();
+          ctx.shadowColor = `rgba(255,255,255,${pulse})`;
+          ctx.shadowBlur = 18;
+          ctx.strokeStyle = "#ffffff";
+          ctx.lineWidth = 2.5;
+          roundRect(ctx, x + 3, y + 3, TILE - 6, TILE - 6, 14);
+          ctx.stroke();
+          ctx.restore();
+        }
+      }
+    }
+
+    // hint overlay
+    if (hintCells && hintCells.size > 0) {
+      ctx.save();
+      ctx.strokeStyle = "#34d399"; // mint-teal hint
+      ctx.lineWidth = 4;
+      for (const k of hintCells) {
+        const [r, c] = unkey(k);
+        const x = PADDING + c * TILE;
+        const y = PADDING + r * TILE;
+        roundRect(ctx, x + 2, y + 2, TILE - 4, TILE - 4, 12);
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
+
+    if (justShuffled) {
+      ctx.save();
+      ctx.fillStyle = "rgba(0,0,0,0.55)";
+      ctx.fillRect(PADDING - 6, PADDING - 6, size * TILE + 12, size * TILE + 12);
+      ctx.fillStyle = "#fff";
+      ctx.font = "bold 20px system-ui, -apple-system, Segoe UI, Roboto";
+      ctx.textAlign = "center";
+      ctx.fillText("No moves – Shuffled!", PADDING + (size * TILE) / 2, PADDING + (size * TILE) / 2);
+      ctx.restore();
+    }
+  }, [board, logicalSize, dpr, size, selected, justShuffled, hintCells, tick]);
+
+  // Internal tests once
+  useEffect(() => {
+    runInternalTests(BLOCK);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Idle hint: after 10s without action, highlight a valid swap (two tiles)
+  useEffect(() => {
+    const poll = setInterval(() => {
+      if (busy || moves <= 0) { setHintCells(null); return; }
+      const idleFor = Date.now() - lastActionAt;
+      if (idleFor >= 10000) {
+        const h = findFirstHint(board, BLOCK);
+        if (h) setHintCells(new Set([key(h.a.r, h.a.c), key(h.b.r, h.b.c)])); else setHintCells(null);
+      } else {
+        setHintCells(null);
+      }
+    }, 500);
+    return () => clearInterval(poll);
+  }, [board, busy, moves, lastActionAt]);
+
+  // Auto-shuffle watcher: whenever board is stable and has no valid moves
+  useEffect(() => {
+    if (busy || moves <= 0) return;
+    // Avoid shuffling mid-cascade; ensure no matches are present
+    if (findMatchGroups(board, BLOCK).length > 0) return;
+    if (!hasAnyValidMove(board, BLOCK)) {
+      const shuffled = reshuffleBoard(board, TYPES, BLOCK);
+      setJustShuffled(true);
+      setBoard(shuffled);
+      const t = setTimeout(() => setJustShuffled(false), 500);
+      setLastActionAt(Date.now());
+      setHintCells(null);
+      return () => clearTimeout(t);
+    }
+  }, [board, busy, moves]);
+
+  // Pointer (mouse/touch)
+  const handlePointer = async (clientX, clientY) => {
+    if (busy) return;
+    setLastActionAt(Date.now());
+    setHintCells(null);
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const rect = canvas.getBoundingClientRect();
+    // Use logical coordinates (canvas.style dimensions, not canvas.width/height which are scaled by dpr)
+    const x = clientX - rect.left;
+    const y = clientY - rect.top;
+    const c = Math.floor((x - PADDING) / TILE);
+    const r = Math.floor((y - PADDING) / TILE);
+    if (r < 0 || r >= size || c < 0 || c >= size) {
+      setSelected(null);
+      return;
+    }
+    const cell = board[r] && board[r][c];
+    if (!cell || cell.type === BLOCK) return;
+
+    ensureAudio();
+    beep(660, 0.04, 0.02);
+
+    if (!selected) {
+      setSelected({ r, c });
+      return;
+    }
+    if (selected.r === r && selected.c === c) {
+      setSelected(null);
+      return;
+    }
+
+    // Adjacent & playable swap only
+    const selCell = board[selected.r][selected.c];
+    if (!selCell || selCell.type === BLOCK || cell.type === BLOCK) {
+      setSelected(null);
+      return;
+    }
+    if (Math.abs(selected.r - r) + Math.abs(selected.c - c) !== 1) {
+      setSelected({ r, c });
+      return;
+    }
+
+    // Attempt swap
+    setBusy(true);
+    const r1 = selected.r, c1 = selected.c;
+    setSelected(null);
+
+    const swapped = swapCloned(board, r1, c1, r, c);
+    const groups = findMatchGroups(swapped, BLOCK);
+    if (groups.length === 0) {
+      beep(200, 0.05, 0.02);
+      setBoard(board.slice());
+      setBusy(false);
+      return;
+    }
+
+    // Commit + resolve
+    setBoard(swapped);
+    setMoves((m) => {
+      const newMoves = Math.max(0, m - 1);
+      // Send HUD update to Swift
+      try {
+        if (window.webkit?.messageHandlers?.hud) {
+          window.webkit.messageHandlers.hud.postMessage({ score, best, moves: newMoves });
+        }
+      } catch (e) {
+        console.error("Error sending HUD update:", e);
+      }
+      return newMoves;
+    });
+    lastSwapRef.current = { a: { r: r1, c: c1 }, b: { r, c } };
+    const finalBoard = await resolveCascades(swapped);
+
+    setLastActionAt(Date.now());
+    setHintCells(null);
+
+    // Auto‑shuffle if stuck (use the final settled board)
+    if (!hasAnyValidMove(finalBoard, BLOCK)) {
+      const shuffled = reshuffleBoard(finalBoard, TYPES, BLOCK);
+      setJustShuffled(true);
+      setBoard(shuffled);
+      await sleep(500);
+      setJustShuffled(false);
+      setLastActionAt(Date.now());
+      setHintCells(null);
+    }
+
+    setBusy(false);
+  };
+
+  const resolveCascades = async (startBoard) => {
+    let cur = startBoard;
+    let chain = 0;
+    while (true) {
+      const groups = findMatchGroups(cur, BLOCK);
+      if (groups.length === 0) break;
+      chain++;
+
+      const specialsToPlace = [];
+      const toClear = new Set();
+
+      for (const g of groups) {
+        const len = g.cells.length;
+        for (const rc of g.cells) toClear.add(key(rc.r, rc.c));
+        if (len >= 5) {
+          const spawnAt = pickSpawn(cur, g, lastSwapRef.current);
+          specialsToPlace.push({ ...spawnAt, kind: "bomb" });
+        } else if (len === 4) {
+          const spawnAt = pickSpawn(cur, g, lastSwapRef.current);
+          specialsToPlace.push({ ...spawnAt, kind: g.dir === "row" ? "stripeH" : "stripeV" });
+        }
+      }
+
+      const expanded = expandBySpecials(cur, toClear, BLOCK);
+      for (const k of expanded) toClear.add(k);
+
+      let cleared = clearCells(cur, toClear);
+      cleared = placeSpecials(cleared, specialsToPlace, TYPES);
+
+      const points = Math.round(toClear.size * 10 * chain);
+      setScore((s) => {
+        const next = s + points;
+        setBest((b) => Math.max(b, next));
+        // Send HUD update to Swift
+        try {
+          if (window.webkit?.messageHandlers?.hud) {
+            window.webkit.messageHandlers.hud.postMessage({ score: next, best: Math.max(b, next), moves });
+          }
+        } catch (e) {
+          console.error("Error sending HUD update:", e);
+        }
+        return next;
+      });
+      beep(440 + chain * 80, 0.07, 0.03);
+      setBoard(cleared);
+      await sleep(110);
+      cur = applyGravity(cleared, BLOCK);
+      setBoard(cur);
+      await sleep(110);
+      cur = refillBoard(cur, TYPES, BLOCK);
+      setBoard(cur);
+      await sleep(90);
+    }
+    return cur;
+  };
+
+  const onPointerDown = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setLastActionAt(Date.now());
+    setHintCells(null);
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const rect = canvas.getBoundingClientRect();
+    const x = e.clientX !== undefined ? e.clientX : (e.touches?.[0]?.clientX ?? e.changedTouches?.[0]?.clientX);
+    const y = e.clientY !== undefined ? e.clientY : (e.touches?.[0]?.clientY ?? e.changedTouches?.[0]?.clientY);
+    if (x !== undefined && y !== undefined) {
+      handlePointer(x, y);
+    }
+  };
+  
+  const onMouseDown = (e) => onPointerDown(e);
+  const onTouchStart = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    onPointerDown(e);
+  };
+
+  const canPlay = moves > 0;
+
+  // Expose GameAPI for Swift to call
+  useEffect(() => {
+    window.GameAPI = { 
+      newGame: (seed) => {
+        newGame(levelIndex);
+      }
+    };
+  }, [levelIndex]);
+
+  // Send HUD updates to Swift whenever values change
+  useEffect(() => {
+    try {
+      if (window.webkit?.messageHandlers?.hud) {
+        window.webkit.messageHandlers.hud.postMessage({ score, best, moves });
+      }
+    } catch (e) {
+      console.error("Error sending HUD update:", e);
+    }
+  }, [score, best, moves]);
+
+  return (
+    <div className="relative flex items-center justify-center w-full h-full">
+      {!canPlay && (
+        <div className="absolute inset-0 z-10 flex items-center justify-center">
+          <div className="bg-black/60 backdrop-blur-sm px-6 py-4 rounded-2xl text-center">
+            <div className="text-lg font-semibold mb-1 text-white">Out of moves</div>
+            <div className="text-sm mb-3 text-white">Use New Game button to play again.</div>
+          </div>
+        </div>
+      )}
+      <canvas 
+        ref={canvasRef} 
+        onMouseDown={onMouseDown} 
+        onTouchStart={onTouchStart}
+        onTouchMove={(e) => { e.preventDefault(); e.stopPropagation(); }}
+        onTouchEnd={(e) => { e.preventDefault(); e.stopPropagation(); }}
+        className="rounded-2xl shadow-xl select-none cursor-pointer"
+        style={{ 
+          opacity: canPlay ? 1 : 0.7,
+          touchAction: 'none',
+          userSelect: 'none',
+          WebkitUserSelect: 'none'
+        }}
+      />
+    </div>
+  );
+}
+
+
+// ---------------- Board creation (robust) ----------------
+
+function makeFreshBoard(level, types, BLOCK) {
+  const n = level.size;
+  let b = makeBoard(level, types, BLOCK);
+
+  // Ensure: no immediate matches and (if layout allows) at least one valid move
+  let guard = 0;
+  const layoutPossible = levelHasOrthogonalAdjacency(level);
+  while (guard++ < 200) {
+    const noInstant = findMatchGroups(b, BLOCK).length === 0;
+    const okMove = !layoutPossible || hasAnyValidMove(b, BLOCK);
+    if (isValidBoard(b, n) && noInstant && okMove) break;
+    b = makeBoard(level, types, BLOCK);
+  }
+  return b;
+}
+
+function makeBoard(level, types, BLOCK) {
+  const n = level.size;
+  let id = 1;
+  const b = Array.from({ length: n }, (_, r) =>
+    Array.from({ length: n }, (_, c) =>
+      level.mask(r, c)
+        ? { type: randInt(types), id: id++, special: "none", keys: randKeys() }
+        : { type: BLOCK, id: id++, special: "none", keys: { u: false, r: false, d: false, l: false } }
+    )
+  );
+  // Light pruning of instant 3‑lines (only on playable cells) under key rules
+  for (let r = 0; r < n; r++) {
+    for (let c = 0; c < n; c++) {
+      if (b[r][c].type === BLOCK) continue;
+      // change type if we accidentally formed a key‑connected triple horizontally
+      if (c >= 2 && connectedH(b[r][c - 2], b[r][c - 1]) && connectedH(b[r][c - 1], b[r][c]) &&
+          b[r][c - 2].type === b[r][c - 1].type && b[r][c - 1].type === b[r][c].type) {
+        b[r][c].type = (b[r][c].type + 1) % types;
+      }
+      // change type for vertical accidental triple
+      if (r >= 2 && connectedV(b[r - 2][c], b[r - 1][c]) && connectedV(b[r - 1][c], b[r][c]) &&
+          b[r - 2][c].type === b[r - 1][c].type && b[r - 1][c].type === b[r][c].type) {
+        b[r][c].type = (b[r][c].type + 1) % types;
+      }
+    }
+  }
+  return b;
+}
+
+function isValidBoard(b, n) {
+  if (!Array.isArray(b) || b.length !== n) return false;
+  for (let r = 0; r < n; r++) {
+    if (!Array.isArray(b[r]) || b[r].length !== n) return false;
+    for (let c = 0; c < n; c++) {
+      const cell = b[r][c];
+      if (!cell || typeof cell.type !== "number" || typeof cell.id !== "number") return false;
+      if (!cell.keys) return false;
+    }
+  }
+  return true;
+}
+
+function levelHasOrthogonalAdjacency(level) {
+  const n = level.size;
+  for (let r = 0; r < n; r++) {
+    for (let c = 0; c < n; c++) {
+      if (!level.mask(r, c)) continue;
+      if (r + 1 < n && level.mask(r + 1, c)) return true;
+      if (c + 1 < n && level.mask(r, c + 1)) return true;
+    }
+  }
+  return false;
+}
+
+// ---------------- Swap / Match / Resolve ----------------
+
+function swapCloned(b, r1, c1, r2, c2) {
+  const n = b.length;
+  const out = b.map((row) => row.map((c) => ({ ...c })));
+  const tmp = out[r1][c1];
+  out[r1][c1] = out[r2][c2];
+  out[r2][c2] = tmp;
+  let id = 1;
+  for (let r = 0; r < n; r++) for (let c = 0; c < n; c++) out[r][c] = { ...out[r][c], id: id++ };
+  return out;
+}
+
+// Bending-chain keyed matching (orthogonal connectivity with aligned keys)
+function findMatchGroups(b, BLOCK) {
+  const n = b.length;
+  const seen = Array.from({ length: n }, () => Array(n).fill(false));
+  const groups = [];
+
+  const inb = (r, c) => r >= 0 && r < n && c >= 0 && c < n;
+  const neighs = [
+    { dr: 0, dc: 1, can: (a, d) => canLinkH(a, d) && a.type === d.type },
+    { dr: 1, dc: 0, can: (a, d) => canLinkV(a, d) && a.type === d.type },
+    { dr: 0, dc: -1, can: (a, d) => canLinkH(d, a) && a.type === d.type }, // reverse horiz
+    { dr: -1, dc: 0, can: (a, d) => canLinkV(d, a) && a.type === d.type }, // reverse vert
+  ];
+
+  for (let r = 0; r < n; r++) {
+    for (let c = 0; c < n; c++) {
+      if (seen[r][c]) continue;
+      const start = b[r][c];
+      if (!start || start.type < 0 || start.type === BLOCK) { seen[r][c] = true; continue; }
+
+      // BFS component under keyed connectivity for same type
+      const queue = [{ r, c }];
+      const comp = [];
+      seen[r][c] = true;
+      while (queue.length) {
+        const cur = queue.shift();
+        comp.push(cur);
+        for (const { dr, dc, can } of neighs) {
+          const rr = cur.r + dr, cc = cur.c + dc;
+          if (!inb(rr, cc) || seen[rr][cc]) continue;
+          const A = b[cur.r][cur.c];
+          const D = b[rr][cc];
+          if (D.type >= 0 && can(A, D)) {
+            seen[rr][cc] = true;
+            queue.push({ r: rr, c: cc });
+          }
+        }
+      }
+
+      if (comp.length >= 3) {
+        // Stripe orientation inferred from the longest straight segment within the component
+        const set = new Set(comp.map(({ r, c }) => key(r, c)));
+        const hMax = longestLine(set, true);
+        const vMax = longestLine(set, false);
+        const dir = hMax >= vMax ? "row" : "col";
+        groups.push({ dir, cells: comp });
+      }
+    }
+  }
+  return groups;
+}
+
+function longestLine(kset, horizontal) {
+  // Count the maximum contiguous horizontal (or vertical) length inside the set.
+  let max = 1;
+  const coords = Array.from(kset).map(unkey);
+  const byRow = new Map();
+  const byCol = new Map();
+  for (const [r, c] of coords) {
+    if (!byRow.has(r)) byRow.set(r, []);
+    byRow.get(r).push(c);
+    if (!byCol.has(c)) byCol.set(c, []);
+    byCol.get(c).push(r);
+  }
+  if (horizontal) {
+    for (const [r, arrRaw] of byRow.entries()) {
+      const arr = arrRaw.sort((a, b) => a - b);
+      let run = 1;
+      for (let i = 1; i < arr.length; i++) {
+        if (arr[i] === arr[i - 1] + 1) run++; else { max = Math.max(max, run); run = 1; }
+      }
+      max = Math.max(max, run);
+    }
+  } else {
+    for (const [c, arrRaw] of byCol.entries()) {
+      const arr = arrRaw.sort((a, b) => a - b);
+      let run = 1;
+      for (let i = 1; i < arr.length; i++) {
+        if (arr[i] === arr[i - 1] + 1) run++; else { max = Math.max(max, run); run = 1; }
+      }
+      max = Math.max(max, run);
+    }
+  }
+  return max;
+}
+
+function expandBySpecials(b, base, BLOCK) {
+  const n = b.length;
+  const extra = new Set();
+  const add = (r, c) => {
+    if (b[r][c].type === BLOCK) return;
+    extra.add(key(r, c));
+  };
+  for (const k of base) {
+    const [r, c] = unkey(k);
+    const cell = b[r][c];
+    if (cell.type === BLOCK) continue;
+    if (cell.special === "stripeH") {
+      for (let x = 0; x < n; x++) if (b[r][x].type !== BLOCK) add(r, x);
+    } else if (cell.special === "stripeV") {
+      for (let y = 0; y < n; y++) if (b[y][c].type !== BLOCK) add(y, c);
+    } else if (cell.special === "bomb") {
+      for (let dr = -1; dr <= 1; dr++) for (let dc = -1; dc <= 1; dc++) {
+        const rr = r + dr, cc = c + dc;
+        if (rr >= 0 && rr < n && cc >= 0 && cc < n && b[rr][cc].type !== BLOCK) add(rr, cc);
+      }
+    }
+  }
+  return extra;
+}
+
+function clearCells(b, toClear) {
+  const out = b.map((row) => row.map((c) => ({ ...c })));
+  for (const k of toClear) {
+    const [r, c] = unkey(k);
+    if (out[r][c].type >= 0) out[r][c] = { ...out[r][c], type: -1, special: "none" };
+  }
+  return out;
+}
+
+function placeSpecials(b, list, types) {
+  const n = b.length;
+  const out = b.map((row) => row.map((c) => ({ ...c })));
+  for (const s of list) {
+    if (s.r < 0 || s.r >= n || s.c < 0 || s.c >= n) continue;
+    if (out[s.r][s.c].type === -1) {
+      out[s.r][s.c] = { type: randInt(types), id: out[s.r][s.c].id, special: s.kind, keys: randKeys() };
+    } else if (out[s.r][s.c].type >= 0) {
+      out[s.r][s.c] = { ...out[s.r][s.c], special: s.kind };
+    }
+  }
+  return out;
+}
+
+// Gravity segmented by blocks
+function applyGravity(b, BLOCK) {
+  const n = b.length;
+  const out = b.map((row) => row.map((c) => ({ ...c })));
+  for (let c = 0; c < n; c++) {
+    let wr = n - 1;
+    for (let r = n - 1; r >= 0; r--) {
+      if (out[r][c].type === BLOCK) {
+        wr = r - 1;
+      } else if (out[r][c].type >= 0) {
+        if (wr !== r) out[wr][c] = out[r][c];
+        wr--;
+      }
+    }
+    for (let r = wr; r >= 0; r--) {
+      if (out[r][c].type !== BLOCK) out[r][c] = { ...out[r][c], type: -1, special: "none" };
+      else {
+        wr = r - 1;
+      }
+    }
+  }
+  return out;
+}
+
+function refillBoard(b, types, BLOCK) {
+  const n = b.length;
+  let id = 1;
+  const out = b.map((row) => row.map((c) => ({ ...c })));
+  for (let r = 0; r < n; r++) {
+    for (let c = 0; c < n; c++) {
+      if (out[r][c].type === -1) out[r][c] = { type: randInt(types), id: id++, special: "none", keys: randKeys() };
+    }
+  }
+  return out;
+}
+
+// Reshuffle playable tiles until: no instant matches; and if possible layout, at least one valid move.
+function reshuffleBoard(b, types, BLOCK) {
+  const n = b.length;
+  // Lock specials in place; only shuffle normal (special === "none") playable tiles
+  const movable = [];
+  const vals = [];
+  for (let r = 0; r < n; r++) {
+    for (let c = 0; c < n; c++) {
+      const cell = b[r][c];
+      if (cell.type >= 0 && cell.special === "none") {
+        movable.push({ r, c });
+        vals.push({ type: cell.type, keys: cell.keys });
+      }
+    }
+  }
+  const layoutPossible = boardHasOrthogonalAdjacency(b, BLOCK);
+  let guard = 0;
+  while (guard++ < 500) {
+    shuffle(vals);
+    // Start from an exact clone so specials and blocks remain untouched
+    const out = b.map((row) => row.map((cell) => ({ ...cell })));
+    movable.forEach((rc, i) => {
+      const cur = out[rc.r][rc.c];
+      out[rc.r][rc.c] = { type: vals[i].type, id: cur.id, special: cur.special, keys: vals[i].keys };
+    });
+    const noInstant = findMatchGroups(out, BLOCK).length === 0;
+    if (!noInstant) continue;
+    if (!layoutPossible || hasAnyValidMove(out, BLOCK)) return out;
+  }
+  // fallback: rebuild only the movable cells randomly while keeping specials fixed
+  const out = b.map((row) => row.map((cell) => ({ ...cell })));
+  movable.forEach((rc) => {
+    const cur = out[rc.r][rc.c];
+    out[rc.r][rc.c] = { type: randInt(types), id: cur.id, special: cur.special, keys: randKeys() };
+  });
+  return out;
+}
+
+function hasAnyValidMove(b, BLOCK) {
+  const n = b.length;
+  const trySwap = (r1, c1, r2, c2) => {
+    if (b[r1][c1].type < 0 || b[r2][c2].type < 0) return false;
+    const swapped = swapCloned(b, r1, c1, r2, c2);
+    return findMatchGroups(swapped, BLOCK).length > 0;
+  };
+  for (let r = 0; r < n; r++) {
+    for (let c = 0; c < n; c++) {
+      if (b[r][c].type < 0) continue;
+      if (c + 1 < n && b[r][c + 1].type >= 0 && trySwap(r, c, r, c + 1)) return true;
+      if (r + 1 < n && b[r + 1][c].type >= 0 && trySwap(r, c, r + 1, c)) return true;
+    }
+  }
+  return false;
+}
+
+function findFirstHint(b, BLOCK) {
+  const n = b.length;
+  const createsMatch = (r1, c1, r2, c2) => {
+    if (b[r1][c1].type < 0 || b[r2][c2].type < 0) return false;
+    const swapped = swapCloned(b, r1, c1, r2, c2);
+    return findMatchGroups(swapped, BLOCK).length > 0;
+  };
+  for (let r = 0; r < n; r++) {
+    for (let c = 0; c < n; c++) {
+      if (b[r][c].type < 0) continue;
+      if (c + 1 < n && b[r][c + 1].type >= 0 && createsMatch(r, c, r, c + 1)) return { a: { r, c }, b: { r, c: c + 1 } };
+      if (r + 1 < n && b[r + 1][c].type >= 0 && createsMatch(r, c, r + 1, c)) return { a: { r, c }, b: { r: r + 1, c } };
+    }
+  }
+  return null;
+}
+
+// ---------------- Utilities ----------------
+
+function randInt(max) { return Math.floor(Math.random() * max); }
+function key(r, c) { return r + "," + c; }
+function unkey(k) { const [r, c] = k.split(",").map(Number); return [r, c]; }
+function sleep(ms) { return new Promise((res) => setTimeout(res, ms)); }
+function shuffle(arr) { for (let i = arr.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [arr[i], arr[j]] = [arr[j], arr[i]]; } }
+
+function boardHasOrthogonalAdjacency(b, BLOCK) {
+  const n = b.length;
+  for (let r = 0; r < n; r++) {
+    for (let c = 0; c < n; c++) {
+      if (b[r][c].type === BLOCK) continue;
+      if (r + 1 < n && b[r + 1][c].type !== BLOCK) return true;
+      if (c + 1 < n && b[r][c + 1].type !== BLOCK) return true;
+    }
+  }
+  return false;
+}
+
+function roundRect(ctx, x, y, w, h, r) {
+  const min = Math.min(w, h);
+  if (r > min / 2) r = min / 2;
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
+}
+
+function drawHUD(ctx, score, moves, best, dim) {
+  ctx.save();
+  // top bar
+  ctx.globalAlpha = 0.9;
+  roundRect(ctx, 12, 10, dim - 24, 36, 10);
+  const lg = ctx.createLinearGradient(12, 10, dim - 12, 46);
+  lg.addColorStop(0, "rgba(21, 56, 104, 0.85)");
+  lg.addColorStop(1, "rgba(14, 41, 90, 0.85)");
+  ctx.fillStyle = lg; ctx.fill();
+  ctx.globalAlpha = 1;
+  ctx.fillStyle = "#fff";
+  ctx.font = "600 16px system-ui, -apple-system, Segoe UI, Roboto";
+  ctx.textBaseline = "middle";
+  ctx.textAlign = "left";
+  ctx.fillText(`Score: ${score}`, 24, 28);
+  ctx.textAlign = "center";
+  ctx.fillText(`Best: ${best}`, dim / 2, 28);
+  ctx.textAlign = "right";
+  ctx.fillText(`Moves: ${moves}`, dim - 24, 28);
+  ctx.restore();
+}
+
+// --- Key rules helpers ---
+function canLinkH(a, b) { return a.type >= 0 && b.type >= 0 && a.keys.r && b.keys.l; }
+function canLinkV(a, b) { return a.type >= 0 && b.type >= 0 && a.keys.d && b.keys.u; }
+function connectedH(a, b) { return a.type === b.type && canLinkH(a, b); }
+function connectedV(a, b) { return a.type === b.type && canLinkV(a, b); }
+
+function randKeys() {
+  // Random multi‑sided keys; bias towards 2 sides on average
+  const patterns = [
+    { u: true, r: false, d: true, l: false },
+    { u: false, r: true, d: false, l: true },
+    { u: true, r: true, d: false, l: false },
+    { u: false, r: true, d: true, l: false },
+    { u: false, r: false, d: true, l: true },
+    { u: true, r: false, d: false, l: true },
+    { u: true, r: true, d: true, l: false },
+    { u: false, r: true, d: true, l: true },
+    { u: true, r: false, d: true, l: true },
+    { u: true, r: true, d: false, l: true },
+  ];
+  return patterns[randInt(patterns.length)];
+}
+
+// Sleek, high-contrast tile look
+function drawTile(ctx, x, y, size, cell, BLOCK) {
+  // Visuals must match logic: arms stop mid‑tile (no implied bridges), chevrons mark keyed sides
+  const palette = ["#FF6B6B", "#4DD0FF", "#3EE6A3", "#B48CFF", "#FFD15A", "#78B8FF"]; // brighter
+  const col = palette[((cell.type % palette.length) + palette.length) % palette.length];
+
+  if (cell.type === BLOCK) {
+    ctx.save(); roundRect(ctx, x + 2, y + 2, size - 4, size - 4, 12);
+    ctx.fillStyle = "#0b1220"; ctx.fill(); ctx.restore(); return;
+  }
+
+  // Base glassy card
+  ctx.save();
+  roundRect(ctx, x + 4, y + 4, size - 8, size - 8, 16);
+  const g = ctx.createLinearGradient(x, y, x, y + size);
+  g.addColorStop(0, "#173a6e"); g.addColorStop(1, "#0e2d5a");
+  ctx.fillStyle = g; ctx.fill();
+  ctx.lineWidth = 2; ctx.strokeStyle = "rgba(255,255,255,0.12)"; ctx.stroke();
+  ctx.restore();
+
+  // Center gem
+  const cx = x + size / 2, cy = y + size / 2;
+  const gemSize = size * 0.44;
+  ctx.save(); roundRect(ctx, cx - gemSize/2, cy - gemSize/2, gemSize, gemSize, gemSize * 0.4);
+  ctx.fillStyle = col; ctx.fill();
+  ctx.strokeStyle = "rgba(255,255,255,0.35)"; ctx.lineWidth = 2; ctx.stroke(); ctx.restore();
+
+  // Arms (center to mid‑tile only)
+  const armW = Math.max(8, size * 0.22);
+  const reach = size * 0.28; // shorter than to edge
+  const drawBar = (x1, y1, x2, y2) => { ctx.beginPath(); ctx.lineCap = "round"; ctx.strokeStyle = col; ctx.lineWidth = armW; ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke(); };
+  if (cell.keys.u) drawBar(cx, cy, cx, cy - reach);
+  if (cell.keys.d) drawBar(cx, cy, cx, cy + reach);
+  if (cell.keys.l) drawBar(cx, cy, cx - reach, cy);
+  if (cell.keys.r) drawBar(cx, cy, cx + reach, cy);
+
+  // Edge chevrons (truthful key cues)
+  const chevron = (px, py, angle, sz = size * 0.18) => {
+    ctx.save(); ctx.translate(px, py); ctx.rotate(angle);
+    ctx.beginPath();
+    ctx.moveTo(0, -sz * 0.45); // tip
+    ctx.lineTo(-sz * 0.38, sz * 0.35);
+    ctx.lineTo(sz * 0.38, sz * 0.35);
+    ctx.closePath();
+    ctx.fillStyle = "#fff"; ctx.globalAlpha = 0.95; ctx.fill();
+    ctx.restore();
+  };
+  const edge = 6;
+  if (cell.keys.u) chevron(cx, y + edge, 0);
+  if (cell.keys.d) chevron(cx, y + size - edge, Math.PI);
+  if (cell.keys.l) chevron(x + edge, cy, -Math.PI/2);
+  if (cell.keys.r) chevron(x + size - edge, cy, Math.PI/2);
+
+  // Specials
+  const center = size * 0.5;
+  if (cell.special === "stripeH") {
+    ctx.save(); ctx.strokeStyle = "#fff"; ctx.lineWidth = 3;
+    for (let i = -1; i <= 1; i++) { ctx.beginPath(); ctx.moveTo(x + 8, y + center + i * 5); ctx.lineTo(x + size - 8, y + center + i * 5); ctx.stroke(); }
+    ctx.restore();
+  } else if (cell.special === "stripeV") {
+    ctx.save(); ctx.strokeStyle = "#fff"; ctx.lineWidth = 3;
+    for (let i = -1; i <= 1; i++) { ctx.beginPath(); ctx.moveTo(x + center + i * 5, y + 8); ctx.lineTo(x + center + i * 5, y + size - 8); ctx.stroke(); }
+    ctx.restore();
+  } else if (cell.special === "bomb") {
+    ctx.save(); ctx.fillStyle = "#fff"; ctx.beginPath(); ctx.arc(cx, cy, size * 0.12, 0, Math.PI * 2); ctx.fill(); ctx.restore();
+  }
+}
+
+
+// Spawn selection favors the last‑swapped position in the group, else first
+function pickSpawn(b, g, last) {
+  const arr = g.cells;
+  if (last) {
+    const hitB = arr.find((p) => p.r === last.b.r && p.c === last.b.c); if (hitB) return hitB;
+    const hitA = arr.find((p) => p.r === last.a.r && p.c === last.a.c); if (hitA) return hitA;
+  }
+  return arr[0];
+}
+
+// ---------------- Internal Tests ----------------
+// These run once on mount and log to console. They should never throw.
+function runInternalTests(BLOCK) {
+  try {
+    const A = 0, B = 1, C = 2;
+    const emptyKeys = { u: false, r: false, d: false, l: false };
+    const mk = (g) => g.map((row, r) => row.map((t, c) => ({ type: t, id: r*10+c, special: "none", keys: { ...emptyKeys } })));
+
+    // helper to set horizontal links for a row segment [c1..c2]
+    const linkRow = (b, r, c1, c2) => {
+      for (let c = c1; c < c2; c++) { b[r][c].keys.r = true; b[r][c+1].keys.l = true; }
+    };
+    // helper to set vertical links for a col segment [r1..r2]
+    const linkCol = (b, c, r1, r2) => {
+      for (let r = r1; r < r2; r++) { b[r][c].keys.d = true; b[r+1][c].keys.u = true; }
+    };
+
+    // Test 1: horizontal match requires keys
+    const boardRow = mk([
+      [A, A, A, B, C, C, B, A],
+      [B, C, B, C, B, C, B, C],
+      [C, B, C, B, C, B, C, B],
+      [A, B, C, A, B, C, A, B],
+      [A, B, C, A, B, C, A, B],
+      [A, B, C, A, B, C, A, B],
+      [A, B, C, A, B, C, A, B],
+      [A, B, C, A, B, C, A, B],
+    ]);
+    // no keys yet -> no match
+    const g0 = findMatchGroups(boardRow, BLOCK);
+    if (g0.length !== 0) console.warn("Test1a: expected no matches without keys");
+    // add keys for first three in row 0 -> now should match
+    linkRow(boardRow, 0, 0, 2);
+    const g1 = findMatchGroups(boardRow, BLOCK);
+    if (!(g1.some(g => g.dir === "row" && g.cells.length >= 3 && g.cells[0].r === 0))) {
+      console.warn("Test1b: expected a key‑connected horizontal match on row 0");
+    }
+
+    // Test 2: vertical requires keys
+    const boardCol = mk([
+      [A, B, C],
+      [A, C, B],
+      [A, B, C],
+      [B, C, B],
+      [C, B, C],
+      [B, C, B],
+      [C, B, C],
+      [B, C, B],
+    ]);
+    // add keys for first col A‑A‑A
+    linkCol(boardCol, 0, 0, 2);
+    const g2 = findMatchGroups(boardCol, BLOCK);
+    if (!(g2.some(g => g.dir === "col" && g.cells.length >= 3))) {
+      console.warn("Test2: expected a key‑connected vertical match");
+    }
+
+    // Test 3: special expansion (stripe clears row)
+    const boardStripe = mk([
+      [A, A, A],
+      [B, B, B],
+      [C, C, C],
+    ]);
+    // keys only matter for spawning, not for effect; force a stripe and then expand
+    boardStripe[1][1].special = "stripeH";
+    const base = new Set([key(1,1)]);
+    const exp = expandBySpecials(boardStripe, base, BLOCK);
+    const rowClearCount = Array.from(exp).filter(k => unkey(k)[0] === 1).length;
+    if (rowClearCount !== 3) console.warn("Test3: stripeH should clear its whole row");
+
+    // Test 4: placeSpecials marks cell as special
+    const after = placeSpecials(boardStripe, [{ r: 0, c: 0, kind: "bomb" }], 6);
+    if (after[0][0].special !== "bomb") console.warn("Test4: expected bomb at 0,0");
+
+    // Test 5: reshuffle produces board with no instant matches
+    const sample = mk([
+      [A, B, C, A],
+      [B, C, A, B],
+      [C, A, B, C],
+      [A, B, C, A],
+    ]);
+    // link a few to create potential matches, then reshuffle should remove any instant matches
+    linkRow(sample, 0, 0, 2);
+    linkCol(sample, 1, 0, 2);
+    const shuffled = reshuffleBoard(sample, 3, BLOCK);
+    const ok5 = findMatchGroups(shuffled, BLOCK).length === 0; // no instant matches
+    if (!ok5) console.warn("Test5: reshuffle should remove instant matches under key rules");
+
+    // Test 6: L‑shape (bending chain) should match when keys form a corner
+    const L = mk([
+      [A, A, B],
+      [B, A, B],
+      [B, A, B],
+    ]);
+    // keys: (0,0)-(0,1) horizontally, and (0,1)-(1,1)-(2,1) vertically
+    L[0][0].keys.r = true; L[0][1].keys.l = true; // horizontal link
+    L[0][1].keys.d = true; L[1][1].keys.u = true; L[1][1].keys.d = true; L[2][1].keys.u = true; // vertical chain
+    const gL = findMatchGroups(L, BLOCK);
+    if (!(gL.length >= 1 && gL[0].cells.length >= 3)) console.warn("Test6: expected bending L‑shape match");
+
+    // Test 7: reshuffle should NOT move or clear specials
+    const withSpecial = mk([
+      [A, B, C, A],
+      [B, A, C, B],
+      [C, B, A, C],
+      [A, C, B, A],
+    ]);
+    withSpecial[1][1].special = "stripeH"; // lock here
+    const beforeType = withSpecial[1][1].type;
+    const resh = reshuffleBoard(withSpecial, 3, BLOCK);
+    if (resh[1][1].special !== "stripeH" || resh[1][1].type !== beforeType) {
+      console.warn("Test7: special should remain in place and unchanged during reshuffle");
+    }
+
+    // Test 8: when no swaps create matches, hint should be null
+    const noMove = mk([
+      [A, B, C, A],
+      [B, C, A, B],
+      [C, A, B, C],
+      [A, B, C, A],
+    ]);
+    const hint = findFirstHint(noMove, BLOCK);
+    if (hint !== null && !hasAnyValidMove(noMove, BLOCK)) {
+      console.warn("Test8: expected null hint when no valid moves exist");
+    }
+
+    console.log("Internal tests completed");
+  } catch (err) {
+    console.error("Internal tests error:", err);
+  }
+}
+
+// === END: your component ===
+
+  // Mount
+  const root = ReactDOM.createRoot(document.getElementById('root'));
+  root.render(React.createElement(Match3CanvasGame));
+  </script>
+</body>
+</html>
