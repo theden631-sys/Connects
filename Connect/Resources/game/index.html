@@ -83,6 +83,8 @@ function Match3CanvasGame() {
   // --- Tunables ---
   const TILE = 48; // px per tile (reduced from 56 to fit better)
   const PADDING = 16; // canvas padding
+  const HUD_HEIGHT = 88; // dedicated top strip for the HUD
+  const BOARD_TOP = PADDING + HUD_HEIGHT;
   const TYPES = 6; // base tile kinds
   const DEFAULT_MOVES = 25;
   const BLOCK = -2; // blocked/impassable cell marker
@@ -112,7 +114,6 @@ function Match3CanvasGame() {
   const [board, setBoard] = useState(() => makeFreshBoard(level, TYPES, BLOCK));
   const [selected, setSelected] = useState(null);
   const [busy, setBusy] = useState(false);
-  const [soundOn, setSoundOn] = useState(true);
   const [justShuffled, setJustShuffled] = useState(false);
   const canvasRef = useRef(null);
   const dpr = typeof window !== "undefined" ? window.devicePixelRatio || 1 : 1;
@@ -133,14 +134,13 @@ function Match3CanvasGame() {
   // WebAudio minimal beeps
   const audioCtxRef = useRef(null);
   const ensureAudio = () => {
-    if (!soundOn) return;
     if (!audioCtxRef.current) {
       const Ctx = (window && (window.AudioContext || window.webkitAudioContext));
       if (Ctx) audioCtxRef.current = new Ctx();
     }
   };
   const playSound = (notes) => {
-    if (!soundOn || !notes || notes.length === 0) return;
+    if (!notes || notes.length === 0) return;
     ensureAudio();
     const ctx = audioCtxRef.current;
     if (!ctx) return;
@@ -201,7 +201,8 @@ function Match3CanvasGame() {
   ]);
 
   // Canvas sizing
-  const logicalSize = useMemo(() => PADDING * 2 + size * TILE, [size]);
+  const logicalWidth = useMemo(() => PADDING * 2 + size * TILE, [size]);
+  const logicalHeight = logicalWidth + HUD_HEIGHT;
 
   function newGame(newLevelIndex = levelIndex) {
     const lvl = LEVELS[newLevelIndex];
@@ -237,11 +238,12 @@ function Match3CanvasGame() {
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
-    const dim = logicalSize;
-    canvas.width = Math.floor(dim * dpr);
-    canvas.height = Math.floor(dim * dpr);
-    canvas.style.width = dim + "px";
-    canvas.style.height = dim + "px";
+    const width = logicalWidth;
+    const height = logicalHeight;
+    canvas.width = Math.floor(width * dpr);
+    canvas.height = Math.floor(height * dpr);
+    canvas.style.width = width + "px";
+    canvas.style.height = height + "px";
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -303,12 +305,12 @@ function Match3CanvasGame() {
     }
 
     // background – mirror the host app gradient for cohesion
-    const bg = ctx.createLinearGradient(0, 0, dim, dim);
+    const bg = ctx.createLinearGradient(0, 0, width, height);
     bg.addColorStop(0, "#081d36");
     bg.addColorStop(0.55, "#0e2642");
     bg.addColorStop(1, "#132c52");
     ctx.fillStyle = bg;
-    ctx.fillRect(0, 0, dim, dim);
+    ctx.fillRect(0, 0, width, height);
 
     // board frame that keeps the playfield dark and cohesive with the app shell
     ctx.save();
@@ -316,7 +318,7 @@ function Match3CanvasGame() {
     ctx.shadowBlur = 28;
     ctx.shadowOffsetY = 20;
     const frameX = PADDING - 10;
-    const frameY = PADDING - 10;
+    const frameY = BOARD_TOP - 10;
     const frameW = size * TILE + 20;
     const frameH = size * TILE + 20;
     roundRect(ctx, frameX, frameY, frameW, frameH, 28);
@@ -329,7 +331,7 @@ function Match3CanvasGame() {
     ctx.shadowOffsetY = 0;
 
     const innerX = PADDING;
-    const innerY = PADDING;
+    const innerY = BOARD_TOP;
     const innerW = size * TILE;
     const innerH = size * TILE;
     roundRect(ctx, innerX, innerY, innerW, innerH, 22);
@@ -361,7 +363,14 @@ function Match3CanvasGame() {
     ctx.restore();
 
     // HUD
-    drawHUD(ctx, score, moves, best, dim);
+    drawHUD(ctx, score, moves, best, width, HUD_HEIGHT, PADDING);
+
+    const easeOutCubic = (t) => 1 - Math.pow(1 - t, 3);
+    const easeOutBack = (t) => {
+      const c1 = 1.70158;
+      const c3 = c1 + 1;
+      return 1 + c3 * Math.pow(t - 1, 3) + c1 * Math.pow(t - 1, 2);
+    };
 
     const easeOutCubic = (t) => 1 - Math.pow(1 - t, 3);
     const easeOutBack = (t) => {
@@ -375,15 +384,15 @@ function Match3CanvasGame() {
       for (let c = 0; c < size; c++) {
         const cell = board[r] && board[r][c];
         const x = PADDING + c * TILE;
-        const y = PADDING + r * TILE;
+        const y = BOARD_TOP + r * TILE;
         if (!cell) continue;
         const coordKey = key(r, c);
         if (skipCoords.has(coordKey)) continue;
 
         const fall = fallMap.get(coordKey);
         if (fall) {
-          const startY = PADDING + fall.item.from.r * TILE;
-          const endY = PADDING + fall.item.to.r * TILE;
+          const startY = BOARD_TOP + fall.item.from.r * TILE;
+          const endY = BOARD_TOP + fall.item.to.r * TILE;
           const eased = easeOutCubic(fall.progress);
           const curY = startY + (endY - startY) * eased;
           drawTile(ctx, x, curY, TILE, cell, BLOCK);
@@ -427,9 +436,9 @@ function Match3CanvasGame() {
         : easeOutCubic(progress);
       tiles.forEach((tile, index) => {
         const fromX = PADDING + tile.from.c * TILE;
-        const fromY = PADDING + tile.from.r * TILE;
+        const fromY = BOARD_TOP + tile.from.r * TILE;
         const toX = PADDING + tile.to.c * TILE;
-        const toY = PADDING + tile.to.r * TILE;
+        const toY = BOARD_TOP + tile.to.r * TILE;
         let ratio;
         if (bounce) {
           const t = Math.min(1, elapsed / duration);
@@ -464,7 +473,7 @@ function Match3CanvasGame() {
       for (const k of hintCells) {
         const [r, c] = unkey(k);
         const x = PADDING + c * TILE;
-        const y = PADDING + r * TILE;
+        const y = BOARD_TOP + r * TILE;
         roundRect(ctx, x + 1.5, y + 1.5, TILE - 3, TILE - 3, 13);
         ctx.stroke();
         ctx.fillStyle = `rgba(255,255,255,${0.08 + glow * 0.08})`;
@@ -480,7 +489,7 @@ function Match3CanvasGame() {
         const eased = easeOutCubic(anim.progress);
         anim.cells.forEach(([rr, cc]) => {
           const cx = PADDING + cc * TILE + TILE / 2;
-          const cy = PADDING + rr * TILE + TILE / 2;
+          const cy = BOARD_TOP + rr * TILE + TILE / 2;
           const radius = (TILE / 2 + 8) * eased;
           const alpha = Math.max(0, 0.7 - anim.progress * 0.7);
           const burst = ctx.createRadialGradient(cx, cy, 4, cx, cy, radius);
@@ -505,14 +514,14 @@ function Match3CanvasGame() {
     if (justShuffled) {
       ctx.save();
       ctx.fillStyle = "rgba(0,0,0,0.55)";
-      ctx.fillRect(PADDING - 6, PADDING - 6, size * TILE + 12, size * TILE + 12);
+      ctx.fillRect(PADDING - 6, BOARD_TOP - 6, size * TILE + 12, size * TILE + 12);
       ctx.fillStyle = "#fff";
       ctx.font = "bold 20px system-ui, -apple-system, Segoe UI, Roboto";
       ctx.textAlign = "center";
-      ctx.fillText("No moves – Shuffled!", PADDING + (size * TILE) / 2, PADDING + (size * TILE) / 2);
+      ctx.fillText("No moves – Shuffled!", PADDING + (size * TILE) / 2, BOARD_TOP + (size * TILE) / 2);
       ctx.restore();
     }
-  }, [board, logicalSize, dpr, size, selected, justShuffled, hintCells, tick]);
+  }, [board, logicalWidth, logicalHeight, dpr, size, selected, justShuffled, hintCells, tick]);
 
   // Internal tests once
   useEffect(() => {
@@ -563,9 +572,11 @@ function Match3CanvasGame() {
     // Use logical coordinates (canvas.style dimensions, not canvas.width/height which are scaled by dpr)
     const x = clientX - rect.left;
     const y = clientY - rect.top;
-    const c = Math.floor((x - PADDING) / TILE);
-    const r = Math.floor((y - PADDING) / TILE);
-    if (r < 0 || r >= size || c < 0 || c >= size) {
+    const localX = x - PADDING;
+    const localY = y - BOARD_TOP;
+    const c = Math.floor(localX / TILE);
+    const r = Math.floor(localY / TILE);
+    if (localY < 0 || localY >= size * TILE || localX < 0 || localX >= size * TILE) {
       setSelected(null);
       return;
     }
@@ -1258,12 +1269,12 @@ function roundRect(ctx, x, y, w, h, r) {
   ctx.closePath();
 }
 
-function drawHUD(ctx, score, moves, best, dim) {
+function drawHUD(ctx, score, moves, best, width, hudHeight, padding) {
   ctx.save();
-  const barX = 24;
-  const barY = 18;
-  const barH = 56;
-  const barW = dim - barX * 2;
+  const barX = padding;
+  const barY = padding;
+  const barH = hudHeight - padding * 2;
+  const barW = width - barX * 2;
   ctx.globalAlpha = 0.97;
   roundRect(ctx, barX, barY, barW, barH, 22);
   const lg = ctx.createLinearGradient(barX, barY, barX, barY + barH);
@@ -1425,20 +1436,6 @@ function drawTile(ctx, x, y, size, cell, BLOCK) {
   if (cell.keys.d) drawRoundedNotch("d");
   if (cell.keys.l) drawRoundedNotch("l");
   if (cell.keys.r) drawRoundedNotch("r");
-
-  // glowing core ring
-  ctx.save();
-  ctx.strokeStyle = "rgba(255,255,255,0.55)";
-  ctx.lineWidth = size * 0.08;
-  ctx.beginPath();
-  ctx.arc(cx, cy, size * 0.28, 0, Math.PI * 2);
-  ctx.stroke();
-  ctx.strokeStyle = paletteEntry.accent;
-  ctx.lineWidth = size * 0.03;
-  ctx.beginPath();
-  ctx.arc(cx, cy, size * 0.28, -Math.PI * 0.35, Math.PI * 0.3);
-  ctx.stroke();
-  ctx.restore();
 
   // Specials - enhanced visual effects
   const center = size * 0.5;
