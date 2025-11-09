@@ -4,10 +4,33 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1" />
   <title>Connections</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Baloo+2:wght@500;700&display=swap" rel="stylesheet" />
   <style>
-    html,body,#root { height:100%; margin:0; background: transparent; }
-    body { -webkit-font-smoothing: antialiased; font-family: -apple-system, system-ui, "Segoe UI", Roboto, sans-serif; }
-    canvas { background: #000; border-radius: 22px; box-shadow: 0 10px 30px rgba(0,0,0,.35); }
+    html, body { height: 100%; }
+    body {
+      margin: 0;
+      background: linear-gradient(135deg, #081d36 0%, #0e2642 55%, #132c52 100%);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      -webkit-font-smoothing: antialiased;
+      font-family: "Baloo 2", -apple-system, system-ui, "Segoe UI", Roboto, sans-serif;
+      color: #2b0b4b;
+    }
+    #root {
+      width: 100%;
+      height: 100%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    canvas {
+      background: linear-gradient(135deg, #0e2a47 0%, #1b2f66 100%);
+      border-radius: 28px;
+      box-shadow: 0 25px 50px rgba(0, 0, 0, 0.55), 0 0 0 3px rgba(22, 48, 86, 0.8);
+    }
   </style>
 </head>
 <body>
@@ -18,7 +41,7 @@
   <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 
-  <script type="text/babel">
+  <script type="text/babel" data-presets="env,react">
 
 // === BEGIN: your working React component (single-file) ===
 // Paste the whole file you currently have open in canvas, exactly as-is.
@@ -31,6 +54,10 @@
 /* ---------------- PASTE BELOW THIS LINE ---------------- */
 
 const { useEffect, useMemo, useRef, useState } = React;
+
+let GLOBAL_ID = 1;
+const nextId = () => GLOBAL_ID++;
+const cloneCell = (cell) => ({ ...cell, keys: { ...cell.keys } });
 
 // Match‑3 Canvas Game – React single‑file (Plain JS, no TypeScript)
 // Features:
@@ -56,6 +83,8 @@ function Match3CanvasGame() {
   // --- Tunables ---
   const TILE = 48; // px per tile (reduced from 56 to fit better)
   const PADDING = 16; // canvas padding
+  const HUD_HEIGHT = 88; // dedicated top strip for the HUD
+  const BOARD_TOP = PADDING + HUD_HEIGHT;
   const TYPES = 6; // base tile kinds
   const DEFAULT_MOVES = 25;
   const BLOCK = -2; // blocked/impassable cell marker
@@ -85,7 +114,6 @@ function Match3CanvasGame() {
   const [board, setBoard] = useState(() => makeFreshBoard(level, TYPES, BLOCK));
   const [selected, setSelected] = useState(null);
   const [busy, setBusy] = useState(false);
-  const [soundOn, setSoundOn] = useState(true);
   const [justShuffled, setJustShuffled] = useState(false);
   const canvasRef = useRef(null);
   const dpr = typeof window !== "undefined" ? window.devicePixelRatio || 1 : 1;
@@ -94,6 +122,8 @@ function Match3CanvasGame() {
   const [hintCells, setHintCells] = useState(null);
   // tiny animation clock for playful pulses
   const [tick, setTick] = useState(0);
+  const animationsRef = useRef({ swap: null, clears: [], falls: [], spawns: [] });
+  const timeNow = () => (typeof performance !== "undefined" && performance.now ? performance.now() : Date.now());
   useEffect(() => {
     let raf;
     const loop = () => { setTick((t) => (t + 1) % 6000); raf = requestAnimationFrame(loop); };
@@ -104,31 +134,75 @@ function Match3CanvasGame() {
   // WebAudio minimal beeps
   const audioCtxRef = useRef(null);
   const ensureAudio = () => {
-    if (!soundOn) return;
     if (!audioCtxRef.current) {
       const Ctx = (window && (window.AudioContext || window.webkitAudioContext));
       if (Ctx) audioCtxRef.current = new Ctx();
     }
   };
-  const beep = (freq = 440, dur = 0.06, gain = 0.03) => {
-    if (!soundOn) return;
+  const playSound = (notes) => {
+    if (!notes || notes.length === 0) return;
+    ensureAudio();
     const ctx = audioCtxRef.current;
     if (!ctx) return;
-    const t = ctx.currentTime;
-    const o = ctx.createOscillator();
-    const g = ctx.createGain();
-    o.type = "sine";
-    o.frequency.setValueAtTime(freq, t);
-    g.gain.setValueAtTime(gain, t);
-    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
-    o.connect(g);
-    g.connect(ctx.destination);
-    o.start(t);
-    o.stop(t + dur);
+    const base = ctx.currentTime;
+    notes.forEach(({ freq, start = 0, dur = 0.18, gain = 0.045, type = "sine" }) => {
+      const osc = ctx.createOscillator();
+      const g = ctx.createGain();
+      osc.type = type;
+      osc.frequency.setValueAtTime(freq, base + start);
+      const attack = Math.max(0.005, Math.min(0.03, dur * 0.2));
+      g.gain.setValueAtTime(0.0001, base + start);
+      g.gain.exponentialRampToValueAtTime(gain, base + start + attack);
+      g.gain.exponentialRampToValueAtTime(0.0001, base + start + dur);
+      osc.connect(g);
+      g.connect(ctx.destination);
+      osc.start(base + start);
+      osc.stop(base + start + dur + 0.02);
+    });
   };
 
+  const playSelect = () => playSound([
+    { freq: 540, dur: 0.14, gain: 0.03, type: "triangle" },
+    { freq: 810, start: 0.02, dur: 0.12, gain: 0.02, type: "sine" }
+  ]);
+
+  const playSwap = () => playSound([
+    { freq: 360, dur: 0.16, gain: 0.035, type: "triangle" },
+    { freq: 520, start: 0.04, dur: 0.18, gain: 0.03, type: "sine" }
+  ]);
+
+  const playInvalid = () => playSound([
+    { freq: 180, dur: 0.2, gain: 0.04, type: "sawtooth" },
+    { freq: 120, start: 0.08, dur: 0.18, gain: 0.03, type: "sine" }
+  ]);
+
+  const playMatch = (chain = 1) => {
+    const base = 620 + chain * 60;
+    playSound([
+      { freq: base, dur: 0.22, gain: 0.04, type: "triangle" },
+      { freq: base * 1.32, start: 0.04, dur: 0.18, gain: 0.03, type: "sine" },
+      { freq: base / 2, start: 0.02, dur: 0.3, gain: 0.025, type: "square" }
+    ]);
+  };
+
+  const playCascade = () => playSound([
+    { freq: 420, dur: 0.24, gain: 0.032, type: "triangle" },
+    { freq: 560, start: 0.05, dur: 0.2, gain: 0.028, type: "sine" }
+  ]);
+
+  const playSpawn = () => playSound([
+    { freq: 880, dur: 0.18, gain: 0.028, type: "sine" },
+    { freq: 1320, start: 0.03, dur: 0.16, gain: 0.02, type: "triangle" }
+  ]);
+
+  const playShuffle = () => playSound([
+    { freq: 260, dur: 0.22, gain: 0.04, type: "sine" },
+    { freq: 400, start: 0.05, dur: 0.24, gain: 0.035, type: "triangle" }
+  ]);
+
   // Canvas sizing
-  const logicalSize = useMemo(() => PADDING * 2 + size * TILE, [size]);
+  const logicalWidth = useMemo(() => PADDING * 2 + size * TILE, [size]);
+  const logicalHeight = logicalWidth + HUD_HEIGHT;
 
   function newGame(newLevelIndex = levelIndex) {
     const lvl = LEVELS[newLevelIndex];
@@ -164,41 +238,174 @@ function Match3CanvasGame() {
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
-    const dim = logicalSize;
-    canvas.width = Math.floor(dim * dpr);
-    canvas.height = Math.floor(dim * dpr);
-    canvas.style.width = dim + "px";
-    canvas.style.height = dim + "px";
+    const width = logicalWidth;
+    const height = logicalHeight;
+    canvas.width = Math.floor(width * dpr);
+    canvas.height = Math.floor(height * dpr);
+    canvas.style.width = width + "px";
+    canvas.style.height = height + "px";
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
-    // background (brighter & relaxing)
-    const bg = ctx.createLinearGradient(0, 0, dim, dim);
-    bg.addColorStop(0, "#0e2a47");   // deep teal
-    bg.addColorStop(1, "#1b2f66");   // indigo-teal mix
-    ctx.fillStyle = bg;
-    ctx.fillRect(0, 0, dim, dim);
+    const now = timeNow();
+    const activeClears = [];
+    animationsRef.current.clears = animationsRef.current.clears.filter((anim) => {
+      const elapsed = now - anim.start;
+      if (elapsed < anim.duration) {
+        activeClears.push({ ...anim, elapsed, progress: Math.min(1, elapsed / anim.duration) });
+        return true;
+      }
+      return false;
+    });
 
-    // board panel
-    roundRect(ctx, PADDING - 6, PADDING - 6, size * TILE + 12, size * TILE + 12, 18);
-    const panel = ctx.createLinearGradient(PADDING, PADDING, PADDING + size * TILE, PADDING + size * TILE);
-    panel.addColorStop(0, "rgba(19, 38, 74, 0.85)");
-    panel.addColorStop(1, "rgba(19, 54, 96, 0.85)");
-    ctx.fillStyle = panel;
+    const fallMap = new Map();
+    animationsRef.current.falls = animationsRef.current.falls.filter((anim) => {
+      const elapsed = now - anim.start;
+      if (elapsed < anim.duration) {
+        const progress = Math.min(1, elapsed / anim.duration);
+        anim.items.forEach((item) => {
+          fallMap.set(key(item.to.r, item.to.c), { progress, item });
+        });
+        return true;
+      }
+      return false;
+    });
+
+    const spawnMap = new Map();
+    animationsRef.current.spawns = animationsRef.current.spawns.filter((anim) => {
+      const elapsed = now - anim.start;
+      if (elapsed < anim.duration) {
+        const progress = Math.min(1, elapsed / anim.duration);
+        anim.cells.forEach((cell) => {
+          spawnMap.set(key(cell.r, cell.c), { progress });
+        });
+        return true;
+      }
+      return false;
+    });
+
+    let swapAnim = animationsRef.current.swap;
+    if (swapAnim) {
+      const elapsed = now - swapAnim.start;
+      if (elapsed >= swapAnim.total) {
+        swapAnim = null;
+        animationsRef.current.swap = null;
+      } else {
+        swapAnim = { ...swapAnim, elapsed };
+      }
+    }
+
+    const skipCoords = new Set();
+    if (swapAnim) {
+      swapAnim.tiles.forEach((tile) => {
+        skipCoords.add(key(tile.from.r, tile.from.c));
+        skipCoords.add(key(tile.to.r, tile.to.c));
+      });
+    }
+
+    // background – mirror the host app gradient for cohesion
+    const bg = ctx.createLinearGradient(0, 0, width, height);
+    bg.addColorStop(0, "#081d36");
+    bg.addColorStop(0.55, "#0e2642");
+    bg.addColorStop(1, "#132c52");
+    ctx.fillStyle = bg;
+    ctx.fillRect(0, 0, width, height);
+
+    // board frame that keeps the playfield dark and cohesive with the app shell
+    ctx.save();
+    ctx.shadowColor = "rgba(0, 0, 0, 0.6)";
+    ctx.shadowBlur = 28;
+    ctx.shadowOffsetY = 20;
+    const frameX = PADDING - 10;
+    const frameY = BOARD_TOP - 10;
+    const frameW = size * TILE + 20;
+    const frameH = size * TILE + 20;
+    roundRect(ctx, frameX, frameY, frameW, frameH, 28);
+    const frameFill = ctx.createLinearGradient(frameX, frameY, frameX, frameY + frameH);
+    frameFill.addColorStop(0, "#0a1d33");
+    frameFill.addColorStop(1, "#020914");
+    ctx.fillStyle = frameFill;
     ctx.fill();
+    ctx.shadowBlur = 0;
+    ctx.shadowOffsetY = 0;
+
+    const innerX = PADDING;
+    const innerY = BOARD_TOP;
+    const innerW = size * TILE;
+    const innerH = size * TILE;
+    roundRect(ctx, innerX, innerY, innerW, innerH, 22);
+    const playfield = ctx.createLinearGradient(innerX, innerY, innerX, innerY + innerH);
+    playfield.addColorStop(0, "#0e2a47");
+    playfield.addColorStop(1, "#0b2038");
+    ctx.fillStyle = playfield;
+    ctx.fill();
+    const bubbleCount = 5;
+    for (let i = 0; i < bubbleCount; i++) {
+      const offset = (tick + i * 240) % 1200;
+      const phase = offset / 1200;
+      const bx = innerX + innerW * (0.15 + 0.7 * ((i % 2 === 0 ? phase : 1 - phase)));
+      const by = innerY + innerH * (0.2 + 0.6 * Math.sin((tick / 40 + i) % (Math.PI * 2)) * 0.5 + 0.3 * (i / bubbleCount));
+      const radius = 22 + 12 * Math.sin((tick / 30 + i) % (Math.PI * 2));
+      const gradient = ctx.createRadialGradient(bx, by, 0, bx, by, radius);
+      gradient.addColorStop(0, "rgba(88, 182, 255, 0.18)");
+      gradient.addColorStop(0.6, "rgba(36, 124, 210, 0.08)");
+      gradient.addColorStop(1, "rgba(10, 40, 80, 0)");
+      ctx.fillStyle = gradient;
+      ctx.beginPath();
+      ctx.arc(bx, by, radius, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = "rgba(32, 86, 140, 0.55)";
+    roundRect(ctx, innerX + 2, innerY + 2, innerW - 4, innerH - 4, 20);
+    ctx.stroke();
+    ctx.restore();
 
     // HUD
-    drawHUD(ctx, score, moves, best, dim);
+    drawHUD(ctx, score, moves, best, width, HUD_HEIGHT, PADDING);
+
+    const easeOutCubic = (t) => 1 - Math.pow(1 - t, 3);
+    const easeOutBack = (t) => {
+      const c1 = 1.70158;
+      const c3 = c1 + 1;
+      return 1 + c3 * Math.pow(t - 1, 3) + c1 * Math.pow(t - 1, 2);
+    };
 
     // tiles
     for (let r = 0; r < size; r++) {
       for (let c = 0; c < size; c++) {
         const cell = board[r] && board[r][c];
         const x = PADDING + c * TILE;
-        const y = PADDING + r * TILE;
+        const y = BOARD_TOP + r * TILE;
         if (!cell) continue;
-        drawTile(ctx, x, y, TILE, cell, BLOCK);
+        const coordKey = key(r, c);
+        if (skipCoords.has(coordKey)) continue;
+
+        const fall = fallMap.get(coordKey);
+        if (fall) {
+          const startY = BOARD_TOP + fall.item.from.r * TILE;
+          const endY = BOARD_TOP + fall.item.to.r * TILE;
+          const eased = easeOutCubic(fall.progress);
+          const curY = startY + (endY - startY) * eased;
+          drawTile(ctx, x, curY, TILE, cell, BLOCK);
+          continue;
+        }
+
+        const spawn = spawnMap.get(coordKey);
+        if (spawn) {
+          const scale = 0.6 + 0.4 * easeOutBack(spawn.progress);
+          ctx.save();
+          ctx.translate(x + TILE / 2, y + TILE / 2);
+          ctx.scale(scale, scale);
+          ctx.translate(-(x + TILE / 2), -(y + TILE / 2));
+          drawTile(ctx, x, y, TILE, cell, BLOCK);
+          ctx.restore();
+        } else {
+          const floatPhase = Math.sin((tick + (r * 37 + c * 19)) * 0.02) * 0.6;
+          drawTile(ctx, x, y + floatPhase, TILE, cell, BLOCK);
+        }
+
         if (selected && selected.r === r && selected.c === c && cell.type >= 0) {
           const phase = (tick % 60) / 60;
           const pulse = 0.35 + 0.25 * Math.sin(phase * Math.PI * 2);
@@ -214,32 +421,100 @@ function Match3CanvasGame() {
       }
     }
 
+    if (swapAnim) {
+      const { duration, elapsed, bounce, tiles } = swapAnim;
+      const progress = Math.min(1, elapsed / duration);
+      const eased = bounce
+        ? easeOutCubic(progress <= 1 ? progress : 2 - progress)
+        : easeOutCubic(progress);
+      tiles.forEach((tile, index) => {
+        const fromX = PADDING + tile.from.c * TILE;
+        const fromY = BOARD_TOP + tile.from.r * TILE;
+        const toX = PADDING + tile.to.c * TILE;
+        const toY = BOARD_TOP + tile.to.r * TILE;
+        let ratio;
+        if (bounce) {
+          const t = Math.min(1, elapsed / duration);
+          ratio = elapsed <= duration ? easeOutCubic(t) : easeOutCubic(1 - (elapsed - duration) / duration);
+        } else {
+          ratio = eased;
+        }
+        const curX = fromX + (toX - fromX) * ratio;
+        const curY = fromY + (toY - fromY) * ratio;
+        ctx.save();
+        ctx.translate(curX + TILE / 2, curY + TILE / 2);
+        const wobble = bounce ? Math.sin((elapsed / duration) * Math.PI) * 0.12 : 0.06;
+        ctx.rotate((index === 0 ? 1 : -1) * wobble);
+        ctx.translate(-(curX + TILE / 2), -(curY + TILE / 2));
+        drawTile(ctx, curX, curY, TILE, tile.cell, BLOCK);
+        ctx.restore();
+      });
+    }
+
     // hint overlay
     if (hintCells && hintCells.size > 0) {
+      const phase = (tick % 120) / 120;
+      const glow = 0.6 + 0.4 * Math.sin(phase * Math.PI * 2);
       ctx.save();
-      ctx.strokeStyle = "#34d399"; // mint-teal hint
-      ctx.lineWidth = 4;
+      ctx.globalCompositeOperation = "lighter";
+      ctx.lineWidth = 4.5;
+      ctx.strokeStyle = `rgba(255,255,255,${0.65 + glow * 0.3})`;
+      ctx.shadowColor = `rgba(255,255,255,${0.5 + glow * 0.5})`;
+      ctx.shadowBlur = 22 + glow * 18;
+      ctx.shadowOffsetX = 0;
+      ctx.shadowOffsetY = 0;
       for (const k of hintCells) {
         const [r, c] = unkey(k);
         const x = PADDING + c * TILE;
-        const y = PADDING + r * TILE;
-        roundRect(ctx, x + 2, y + 2, TILE - 4, TILE - 4, 12);
+        const y = BOARD_TOP + r * TILE;
+        roundRect(ctx, x + 1.5, y + 1.5, TILE - 3, TILE - 3, 13);
         ctx.stroke();
+        ctx.fillStyle = `rgba(255,255,255,${0.08 + glow * 0.08})`;
+        ctx.fill();
       }
+      ctx.restore();
+    }
+
+    if (activeClears.length) {
+      ctx.save();
+      ctx.globalCompositeOperation = "lighter";
+      activeClears.forEach((anim) => {
+        const eased = easeOutCubic(anim.progress);
+        anim.cells.forEach(([rr, cc]) => {
+          const cx = PADDING + cc * TILE + TILE / 2;
+          const cy = BOARD_TOP + rr * TILE + TILE / 2;
+          const radius = (TILE / 2 + 8) * eased;
+          const alpha = Math.max(0, 0.7 - anim.progress * 0.7);
+          const burst = ctx.createRadialGradient(cx, cy, 4, cx, cy, radius);
+          burst.addColorStop(0, `rgba(255,255,255,${0.55 * alpha})`);
+          burst.addColorStop(0.6, `rgba(140,200,255,${0.45 * alpha})`);
+          burst.addColorStop(1, "rgba(0,0,0,0)");
+          ctx.fillStyle = burst;
+          ctx.beginPath();
+          ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+          ctx.fill();
+
+          ctx.strokeStyle = `rgba(255,255,255,${0.8 * alpha})`;
+          ctx.lineWidth = 2 + anim.progress * 2;
+          ctx.beginPath();
+          ctx.arc(cx, cy, radius * 0.65, 0, Math.PI * 2);
+          ctx.stroke();
+        });
+      });
       ctx.restore();
     }
 
     if (justShuffled) {
       ctx.save();
       ctx.fillStyle = "rgba(0,0,0,0.55)";
-      ctx.fillRect(PADDING - 6, PADDING - 6, size * TILE + 12, size * TILE + 12);
+      ctx.fillRect(PADDING - 6, BOARD_TOP - 6, size * TILE + 12, size * TILE + 12);
       ctx.fillStyle = "#fff";
       ctx.font = "bold 20px system-ui, -apple-system, Segoe UI, Roboto";
       ctx.textAlign = "center";
-      ctx.fillText("No moves – Shuffled!", PADDING + (size * TILE) / 2, PADDING + (size * TILE) / 2);
+      ctx.fillText("No moves – Shuffled!", PADDING + (size * TILE) / 2, BOARD_TOP + (size * TILE) / 2);
       ctx.restore();
     }
-  }, [board, logicalSize, dpr, size, selected, justShuffled, hintCells, tick]);
+  }, [board, logicalWidth, logicalHeight, dpr, size, selected, justShuffled, hintCells, tick]);
 
   // Internal tests once
   useEffect(() => {
@@ -270,6 +545,7 @@ function Match3CanvasGame() {
     if (!hasAnyValidMove(board, BLOCK)) {
       const shuffled = reshuffleBoard(board, TYPES, BLOCK);
       setJustShuffled(true);
+      playShuffle();
       setBoard(shuffled);
       const t = setTimeout(() => setJustShuffled(false), 500);
       setLastActionAt(Date.now());
@@ -289,23 +565,24 @@ function Match3CanvasGame() {
     // Use logical coordinates (canvas.style dimensions, not canvas.width/height which are scaled by dpr)
     const x = clientX - rect.left;
     const y = clientY - rect.top;
-    const c = Math.floor((x - PADDING) / TILE);
-    const r = Math.floor((y - PADDING) / TILE);
-    if (r < 0 || r >= size || c < 0 || c >= size) {
+    const localX = x - PADDING;
+    const localY = y - BOARD_TOP;
+    const c = Math.floor(localX / TILE);
+    const r = Math.floor(localY / TILE);
+    if (localY < 0 || localY >= size * TILE || localX < 0 || localX >= size * TILE) {
       setSelected(null);
       return;
     }
     const cell = board[r] && board[r][c];
     if (!cell || cell.type === BLOCK) return;
 
-    ensureAudio();
-    beep(660, 0.04, 0.02);
-
     if (!selected) {
+      playSelect();
       setSelected({ r, c });
       return;
     }
     if (selected.r === r && selected.c === c) {
+      playSelect();
       setSelected(null);
       return;
     }
@@ -317,6 +594,7 @@ function Match3CanvasGame() {
       return;
     }
     if (Math.abs(selected.r - r) + Math.abs(selected.c - c) !== 1) {
+      playSelect();
       setSelected({ r, c });
       return;
     }
@@ -326,16 +604,40 @@ function Match3CanvasGame() {
     const r1 = selected.r, c1 = selected.c;
     setSelected(null);
 
+    const tileA = cloneCell(board[r1][c1]);
+    const tileB = cloneCell(board[r][c]);
     const swapped = swapCloned(board, r1, c1, r, c);
     const groups = findMatchGroups(swapped, BLOCK);
     if (groups.length === 0) {
-      beep(200, 0.05, 0.02);
+      playInvalid();
+      animationsRef.current.swap = {
+        start: timeNow(),
+        duration: 220,
+        total: 440,
+        bounce: true,
+        tiles: [
+          { cell: tileA, from: { r: r1, c: c1 }, to: { r, c } },
+          { cell: tileB, from: { r, c }, to: { r: r1, c: c1 } }
+        ]
+      };
       setBoard(board.slice());
+      await sleep(440);
       setBusy(false);
       return;
     }
 
     // Commit + resolve
+    playSwap();
+    animationsRef.current.swap = {
+      start: timeNow(),
+      duration: 200,
+      total: 200,
+      bounce: false,
+      tiles: [
+        { cell: tileA, from: { r: r1, c: c1 }, to: { r, c } },
+        { cell: tileB, from: { r, c }, to: { r: r1, c: c1 } }
+      ]
+    };
     setBoard(swapped);
     setMoves((m) => {
       const newMoves = Math.max(0, m - 1);
@@ -359,6 +661,7 @@ function Match3CanvasGame() {
     if (!hasAnyValidMove(finalBoard, BLOCK)) {
       const shuffled = reshuffleBoard(finalBoard, TYPES, BLOCK);
       setJustShuffled(true);
+      playShuffle();
       setBoard(shuffled);
       await sleep(500);
       setJustShuffled(false);
@@ -395,6 +698,11 @@ function Match3CanvasGame() {
       const expanded = expandBySpecials(cur, toClear, BLOCK);
       for (const k of expanded) toClear.add(k);
 
+      const burstCells = Array.from(toClear).map(unkey);
+      if (burstCells.length) {
+        animationsRef.current.clears.push({ start: timeNow(), duration: 360, cells: burstCells });
+      }
+
       let cleared = clearCells(cur, toClear);
       cleared = placeSpecials(cleared, specialsToPlace, TYPES);
 
@@ -412,15 +720,29 @@ function Match3CanvasGame() {
         }
         return next;
       });
-      beep(440 + chain * 80, 0.07, 0.03);
+      playMatch(chain);
       setBoard(cleared);
-      await sleep(110);
-      cur = applyGravity(cleared, BLOCK);
+      await sleep(120);
+
+      const falling = [];
+      const gravityBoard = applyGravity(cleared, BLOCK, falling);
+      if (falling.length) {
+        animationsRef.current.falls.push({ start: timeNow(), duration: 260, items: falling });
+        playCascade();
+      }
+      cur = gravityBoard;
       setBoard(cur);
-      await sleep(110);
-      cur = refillBoard(cur, TYPES, BLOCK);
+      await sleep(140);
+
+      const spawned = [];
+      const refilled = refillBoard(cur, TYPES, BLOCK, spawned);
+      if (spawned.length) {
+        animationsRef.current.spawns.push({ start: timeNow(), duration: 260, cells: spawned });
+        playSpawn();
+      }
+      cur = refilled;
       setBoard(cur);
-      await sleep(90);
+      await sleep(120);
     }
     return cur;
   };
@@ -531,12 +853,11 @@ function makeFreshBoard(level, types, BLOCK) {
 
 function makeBoard(level, types, BLOCK) {
   const n = level.size;
-  let id = 1;
   const b = Array.from({ length: n }, (_, r) =>
     Array.from({ length: n }, (_, c) =>
       level.mask(r, c)
-        ? { type: randInt(types), id: id++, special: "none", keys: randKeys() }
-        : { type: BLOCK, id: id++, special: "none", keys: { u: false, r: false, d: false, l: false } }
+        ? { type: randInt(types), id: nextId(), special: "none", keys: randKeys() }
+        : { type: BLOCK, id: nextId(), special: "none", keys: { u: false, r: false, d: false, l: false } }
     )
   );
   // Light pruning of instant 3‑lines (only on playable cells) under key rules
@@ -586,13 +907,10 @@ function levelHasOrthogonalAdjacency(level) {
 // ---------------- Swap / Match / Resolve ----------------
 
 function swapCloned(b, r1, c1, r2, c2) {
-  const n = b.length;
-  const out = b.map((row) => row.map((c) => ({ ...c })));
+  const out = b.map((row) => row.map((cell) => cloneCell(cell)));
   const tmp = out[r1][c1];
   out[r1][c1] = out[r2][c2];
   out[r2][c2] = tmp;
-  let id = 1;
-  for (let r = 0; r < n; r++) for (let c = 0; c < n; c++) out[r][c] = { ...out[r][c], id: id++ };
   return out;
 }
 
@@ -708,7 +1026,7 @@ function expandBySpecials(b, base, BLOCK) {
 }
 
 function clearCells(b, toClear) {
-  const out = b.map((row) => row.map((c) => ({ ...c })));
+  const out = b.map((row) => row.map((c) => cloneCell(c)));
   for (const k of toClear) {
     const [r, c] = unkey(k);
     if (out[r][c].type >= 0) out[r][c] = { ...out[r][c], type: -1, special: "none" };
@@ -718,11 +1036,11 @@ function clearCells(b, toClear) {
 
 function placeSpecials(b, list, types) {
   const n = b.length;
-  const out = b.map((row) => row.map((c) => ({ ...c })));
+  const out = b.map((row) => row.map((c) => cloneCell(c)));
   for (const s of list) {
     if (s.r < 0 || s.r >= n || s.c < 0 || s.c >= n) continue;
     if (out[s.r][s.c].type === -1) {
-      out[s.r][s.c] = { type: randInt(types), id: out[s.r][s.c].id, special: s.kind, keys: randKeys() };
+      out[s.r][s.c] = { type: randInt(types), id: nextId(), special: s.kind, keys: randKeys() };
     } else if (out[s.r][s.c].type >= 0) {
       out[s.r][s.c] = { ...out[s.r][s.c], special: s.kind };
     }
@@ -731,36 +1049,66 @@ function placeSpecials(b, list, types) {
 }
 
 // Gravity segmented by blocks
-function applyGravity(b, BLOCK) {
+function applyGravity(b, BLOCK, moves) {
   const n = b.length;
-  const out = b.map((row) => row.map((c) => ({ ...c })));
+  const origin = moves ? new Map() : null;
+  if (origin) {
+    for (let r = 0; r < n; r++) {
+      for (let c = 0; c < n; c++) {
+        const cell = b[r][c];
+        if (cell.type >= 0) origin.set(cell.id, { r, c });
+      }
+    }
+  }
+  const out = b.map((row) => row.map((c) => cloneCell(c)));
   for (let c = 0; c < n; c++) {
     let wr = n - 1;
     for (let r = n - 1; r >= 0; r--) {
-      if (out[r][c].type === BLOCK) {
+      const cell = out[r][c];
+      if (cell.type === BLOCK) {
         wr = r - 1;
-      } else if (out[r][c].type >= 0) {
-        if (wr !== r) out[wr][c] = out[r][c];
+      } else if (cell.type >= 0) {
+        if (wr !== r) {
+          out[wr][c] = cloneCell(cell);
+          out[r][c] = { ...cell, type: -1, special: "none" };
+        }
         wr--;
       }
     }
     for (let r = wr; r >= 0; r--) {
-      if (out[r][c].type !== BLOCK) out[r][c] = { ...out[r][c], type: -1, special: "none" };
-      else {
+      if (out[r][c].type !== BLOCK) {
+        out[r][c] = { ...out[r][c], type: -1, special: "none" };
+      } else {
         wr = r - 1;
+      }
+    }
+  }
+  if (origin && moves) {
+    for (let r = 0; r < n; r++) {
+      for (let c = 0; c < n; c++) {
+        const cell = out[r][c];
+        if (cell.type >= 0) {
+          const prev = origin.get(cell.id);
+          if (prev && (prev.r !== r || prev.c !== c)) {
+            moves.push({ id: cell.id, from: prev, to: { r, c } });
+          }
+        }
       }
     }
   }
   return out;
 }
 
-function refillBoard(b, types, BLOCK) {
+function refillBoard(b, types, BLOCK, spawned) {
   const n = b.length;
-  let id = 1;
-  const out = b.map((row) => row.map((c) => ({ ...c })));
+  const out = b.map((row) => row.map((c) => cloneCell(c)));
   for (let r = 0; r < n; r++) {
     for (let c = 0; c < n; c++) {
-      if (out[r][c].type === -1) out[r][c] = { type: randInt(types), id: id++, special: "none", keys: randKeys() };
+      if (out[r][c].type === -1) {
+        const newCell = { type: randInt(types), id: nextId(), special: "none", keys: randKeys() };
+        out[r][c] = newCell;
+        if (spawned) spawned.push({ r, c });
+      }
     }
   }
   return out;
@@ -777,7 +1125,7 @@ function reshuffleBoard(b, types, BLOCK) {
       const cell = b[r][c];
       if (cell.type >= 0 && cell.special === "none") {
         movable.push({ r, c });
-        vals.push({ type: cell.type, keys: cell.keys });
+        vals.push({ type: cell.type, keys: { ...cell.keys } });
       }
     }
   }
@@ -786,17 +1134,17 @@ function reshuffleBoard(b, types, BLOCK) {
   while (guard++ < 500) {
     shuffle(vals);
     // Start from an exact clone so specials and blocks remain untouched
-    const out = b.map((row) => row.map((cell) => ({ ...cell })));
+    const out = b.map((row) => row.map((cell) => cloneCell(cell)));
     movable.forEach((rc, i) => {
       const cur = out[rc.r][rc.c];
-      out[rc.r][rc.c] = { type: vals[i].type, id: cur.id, special: cur.special, keys: vals[i].keys };
+      out[rc.r][rc.c] = { type: vals[i].type, id: cur.id, special: cur.special, keys: { ...vals[i].keys } };
     });
     const noInstant = findMatchGroups(out, BLOCK).length === 0;
     if (!noInstant) continue;
     if (!layoutPossible || hasAnyValidMove(out, BLOCK)) return out;
   }
   // fallback: rebuild only the movable cells randomly while keeping specials fixed
-  const out = b.map((row) => row.map((cell) => ({ ...cell })));
+  const out = b.map((row) => row.map((cell) => cloneCell(cell)));
   movable.forEach((rc) => {
     const cur = out[rc.r][rc.c];
     out[rc.r][rc.c] = { type: randInt(types), id: cur.id, special: cur.special, keys: randKeys() };
@@ -870,25 +1218,53 @@ function roundRect(ctx, x, y, w, h, r) {
   ctx.closePath();
 }
 
-function drawHUD(ctx, score, moves, best, dim) {
+function drawHUD(ctx, score, moves, best, width, hudHeight, padding) {
   ctx.save();
-  // top bar
-  ctx.globalAlpha = 0.9;
-  roundRect(ctx, 12, 10, dim - 24, 36, 10);
-  const lg = ctx.createLinearGradient(12, 10, dim - 12, 46);
-  lg.addColorStop(0, "rgba(21, 56, 104, 0.85)");
-  lg.addColorStop(1, "rgba(14, 41, 90, 0.85)");
-  ctx.fillStyle = lg; ctx.fill();
+  const barX = padding;
+  const barY = padding;
+  const barH = hudHeight - padding * 2;
+  const barW = width - barX * 2;
+  ctx.globalAlpha = 0.97;
+  roundRect(ctx, barX, barY, barW, barH, 22);
+  const lg = ctx.createLinearGradient(barX, barY, barX, barY + barH);
+  lg.addColorStop(0, "rgba(10, 28, 52, 0.95)");
+  lg.addColorStop(1, "rgba(5, 18, 34, 0.95)");
+  ctx.fillStyle = lg;
+  ctx.fill();
   ctx.globalAlpha = 1;
-  ctx.fillStyle = "#fff";
-  ctx.font = "600 16px system-ui, -apple-system, Segoe UI, Roboto";
+
+  ctx.strokeStyle = "rgba(31, 77, 122, 0.55)";
+  ctx.lineWidth = 1.5;
+  roundRect(ctx, barX + 1.5, barY + 1.5, barW - 3, barH - 3, 20);
+  ctx.stroke();
+
+  const itemWidth = barW / 3;
+  const labels = [
+    { label: "Score", value: score },
+    { label: "Best", value: best },
+    { label: "Moves", value: moves }
+  ];
   ctx.textBaseline = "middle";
- // ctx.textAlign = "left";
- // ctx.fillText(`Score: ${score}`, 24, 28);
- // ctx.textAlign = "center";
-//  ctx.fillText(`Best: ${best}`, dim / 2, 28);
- // ctx.textAlign = "right";
-  //ctx.fillText(`Moves: ${moves}`, dim - 24, 28);
+  ctx.textAlign = "center";
+  ctx.font = "600 14px 'Baloo 2', system-ui";
+  labels.forEach((item, idx) => {
+    const itemX = barX + idx * itemWidth;
+    if (idx > 0) {
+      ctx.strokeStyle = "rgba(116, 161, 212, 0.2)";
+      ctx.lineWidth = 1.1;
+      ctx.beginPath();
+      ctx.moveTo(itemX, barY + 12);
+      ctx.lineTo(itemX, barY + barH - 12);
+      ctx.stroke();
+    }
+    const centerX = itemX + itemWidth / 2;
+    ctx.fillStyle = "#8fb8ff";
+    ctx.fillText(item.label, centerX, barY + barH / 2 - 12);
+    ctx.font = "700 20px 'Baloo 2', system-ui";
+    ctx.fillStyle = "#f4f8ff";
+    ctx.fillText(String(item.value), centerX, barY + barH / 2 + 8);
+    ctx.font = "600 14px 'Baloo 2', system-ui";
+  });
   ctx.restore();
 }
 
@@ -917,124 +1293,107 @@ function randKeys() {
 
 // Sleek, playful tile design with high contrast colors
 function drawTile(ctx, x, y, size, cell, BLOCK) {
-  // High-contrast, distinct color palette - each color is easily distinguishable
   const palette = [
-    "#FF4757",  // Vibrant Red
-    "#2ED573",  // Bright Green
-    "#1E90FF",  // Pure Blue
-    "#FFA502",  // Orange
-    "#5F27CD",  // Purple
-    "#00D2D3"   // Cyan/Turquoise
+    { top: "#ffe9ff", mid: "#ff9be2", bottom: "#ff55b8", accent: "#ffd6f6", glow: "rgba(255, 126, 220, 0.45)" },
+    { top: "#fff3d8", mid: "#ffd072", bottom: "#ffac3f", accent: "#ffeab1", glow: "rgba(255, 186, 99, 0.45)" },
+    { top: "#ddfff6", mid: "#6ff1cf", bottom: "#17d4a9", accent: "#c6fff2", glow: "rgba(86, 232, 189, 0.45)" },
+    { top: "#e6e3ff", mid: "#a998ff", bottom: "#786aff", accent: "#d4ceff", glow: "rgba(142, 126, 255, 0.45)" },
+    { top: "#e0f1ff", mid: "#7bc1ff", bottom: "#3992ff", accent: "#c7e4ff", glow: "rgba(77, 161, 255, 0.45)" },
+    { top: "#ecffe3", mid: "#a8ff78", bottom: "#52dc5e", accent: "#d6ffca", glow: "rgba(116, 234, 112, 0.45)" }
   ];
-  const col = palette[((cell.type % palette.length) + palette.length) % palette.length];
+  const paletteEntry = palette[((cell.type % palette.length) + palette.length) % palette.length];
 
   if (cell.type === BLOCK) {
-    ctx.save(); roundRect(ctx, x + 2, y + 2, size - 4, size - 4, 12);
-    ctx.fillStyle = "#0b1220"; ctx.fill(); ctx.restore(); return;
+    ctx.save();
+    roundRect(ctx, x + 3, y + 3, size - 6, size - 6, 16);
+    const blocked = ctx.createLinearGradient(x, y, x + size, y + size);
+    blocked.addColorStop(0, "#c5b7ff");
+    blocked.addColorStop(1, "#9a8aff");
+    ctx.fillStyle = blocked;
+    ctx.fill();
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = "rgba(255,255,255,0.65)";
+    roundRect(ctx, x + 5, y + 5, size - 10, size - 10, 14);
+    ctx.stroke();
+    ctx.setLineDash([6, 6]);
+    ctx.strokeStyle = "rgba(83, 52, 173, 0.35)";
+    roundRect(ctx, x + 6, y + 6, size - 12, size - 12, 12);
+    ctx.stroke();
+    ctx.restore();
+    return;
   }
 
-  // Sleek rounded tile with gradient background
+  const cx = x + size / 2;
+  const cy = y + size / 2;
+
   ctx.save();
-  roundRect(ctx, x + 2, y + 2, size - 4, size - 4, 14);
-  
-  // Outer glow effect
-  const outerGlow = ctx.createRadialGradient(x + size/2, y + size/2, size * 0.3, x + size/2, y + size/2, size * 0.6);
-  outerGlow.addColorStop(0, col + "40");
-  outerGlow.addColorStop(1, col + "00");
-  ctx.fillStyle = outerGlow;
+  ctx.shadowColor = paletteEntry.glow;
+  ctx.shadowBlur = 18;
+  ctx.shadowOffsetY = 6;
+  const bodyRadius = size * 0.38;
+  roundRect(ctx, x + 2, y + 4, size - 4, size - 6, bodyRadius);
+  const candy = ctx.createLinearGradient(x, y, x, y + size);
+  candy.addColorStop(0, paletteEntry.top);
+  candy.addColorStop(0.45, paletteEntry.mid);
+  candy.addColorStop(1, paletteEntry.bottom);
+  ctx.fillStyle = candy;
   ctx.fill();
-  
-  // Main tile body with gradient
-  roundRect(ctx, x + 3, y + 3, size - 6, size - 6, 12);
-  const g = ctx.createLinearGradient(x, y, x, y + size);
-  g.addColorStop(0, col + "E6");  // Slightly transparent top
-  g.addColorStop(1, col + "CC");  // More transparent bottom
-  ctx.fillStyle = g;
-  ctx.fill();
-  
-  // Bright border
-  ctx.strokeStyle = col;
-  ctx.lineWidth = 2.5;
+  ctx.shadowBlur = 0;
+  ctx.shadowOffsetY = 0;
+  ctx.lineWidth = 2.2;
+  ctx.strokeStyle = "rgba(255,255,255,0.7)";
+  roundRect(ctx, x + 2.5, y + 4.5, size - 5, size - 7, bodyRadius * 0.92);
   ctx.stroke();
   ctx.restore();
 
-  // Playful center shape - rounded square with shine
-  const cx = x + size / 2, cy = y + size / 2;
-  const gemSize = size * 0.5;
-  ctx.save();
-  
-  // Shine effect
-  roundRect(ctx, cx - gemSize/2, cy - gemSize/2, gemSize, gemSize, gemSize * 0.3);
-  const shineGrad = ctx.createLinearGradient(cx - gemSize/2, cy - gemSize/2, cx + gemSize/2, cy + gemSize/2);
-  shineGrad.addColorStop(0, col);
-  shineGrad.addColorStop(0.5, col + "FF");
-  shineGrad.addColorStop(1, col + "DD");
-  ctx.fillStyle = shineGrad;
-  ctx.fill();
-  
-  // Inner highlight
-  roundRect(ctx, cx - gemSize/2 + 2, cy - gemSize/2 + 2, gemSize - 4, gemSize - 4, gemSize * 0.25);
-  ctx.fillStyle = "rgba(255,255,255,0.3)";
-  ctx.fill();
-  
-  // Border
-  ctx.strokeStyle = "rgba(255,255,255,0.5)";
-  ctx.lineWidth = 1.5;
-  ctx.stroke();
-  ctx.restore();
-
-  // Connection arms - sleek lines
-  const armW = Math.max(6, size * 0.18);
-  const reach = size * 0.32;
-  const drawBar = (x1, y1, x2, y2) => {
+  // key notches as rounded triangular cut-outs
+  const notchWidth = size * 0.36;
+  const notchDepth = size * 0.22;
+  const notchCurve = size * 0.06;
+  const drawRoundedNotch = (direction) => {
     ctx.save();
-    ctx.beginPath();
-    ctx.lineCap = "round";
-    ctx.lineJoin = "round";
-    ctx.strokeStyle = col;
-    ctx.lineWidth = armW;
-    ctx.shadowBlur = 4;
-    ctx.shadowColor = col + "80";
-    ctx.moveTo(x1, y1);
-    ctx.lineTo(x2, y2);
-    ctx.stroke();
-    ctx.restore();
-  };
-  if (cell.keys.u) drawBar(cx, cy, cx, cy - reach);
-  if (cell.keys.d) drawBar(cx, cy, cx, cy + reach);
-  if (cell.keys.l) drawBar(cx, cy, cx - reach, cy);
-  if (cell.keys.r) drawBar(cx, cy, cx + reach, cy);
+    ctx.translate(cx, cy);
+    const rotation = direction === "u" ? 0 : direction === "r" ? Math.PI / 2 : direction === "d" ? Math.PI : -Math.PI / 2;
+    ctx.rotate(rotation);
+    ctx.translate(-cx, -cy);
 
-  // Playful connection indicators - small circles instead of chevrons
-  const indicator = (px, py, sz = size * 0.15) => {
-    ctx.save();
+    const baseY = y + 1.5;
+    const tipY = baseY + notchDepth;
+    const leftX = cx - notchWidth / 2;
+    const rightX = cx + notchWidth / 2;
+    const sideEase = notchWidth * 0.18;
+    const tipEase = notchCurve * 0.9;
+
+    const notchFill = ctx.createLinearGradient(cx, baseY, cx, tipY);
+    notchFill.addColorStop(0, "rgba(16, 11, 32, 0.9)");
+    notchFill.addColorStop(1, "rgba(2, 2, 6, 0.7)");
+    ctx.fillStyle = notchFill;
+
     ctx.beginPath();
-    ctx.arc(px, py, sz, 0, Math.PI * 2);
-    const indGrad = ctx.createRadialGradient(px, py, 0, px, py, sz);
-    indGrad.addColorStop(0, "#fff");
-    indGrad.addColorStop(1, col);
-    ctx.fillStyle = indGrad;
+    ctx.moveTo(leftX, baseY);
+    ctx.quadraticCurveTo(leftX + sideEase * 0.4, baseY + notchCurve * 0.25, leftX + sideEase, baseY + notchCurve * 0.9);
+    ctx.lineTo(cx - tipEase, tipY - notchCurve * 0.45);
+    ctx.quadraticCurveTo(cx, tipY, cx + tipEase, tipY - notchCurve * 0.45);
+    ctx.lineTo(rightX - sideEase, baseY + notchCurve * 0.9);
+    ctx.quadraticCurveTo(rightX - sideEase * 0.4, baseY + notchCurve * 0.25, rightX, baseY);
+    ctx.closePath();
     ctx.fill();
-    ctx.strokeStyle = "#fff";
-    ctx.lineWidth = 1.5;
-    ctx.stroke();
+
     ctx.restore();
   };
-  const edge = 8;
-  if (cell.keys.u) indicator(cx, y + edge);
-  if (cell.keys.d) indicator(cx, y + size - edge);
-  if (cell.keys.l) indicator(x + edge, cy);
-  if (cell.keys.r) indicator(x + size - edge, cy);
+  if (cell.keys.u) drawRoundedNotch("u");
+  if (cell.keys.d) drawRoundedNotch("d");
+  if (cell.keys.l) drawRoundedNotch("l");
+  if (cell.keys.r) drawRoundedNotch("r");
 
   // Specials - enhanced visual effects
   const center = size * 0.5;
   if (cell.special === "stripeH") {
     ctx.save();
-    // Horizontal stripe with glow
-    ctx.shadowBlur = 6;
-    ctx.shadowColor = "#fff";
-    ctx.strokeStyle = "#fff";
-    ctx.lineWidth = 4;
+    ctx.shadowBlur = 8;
+    ctx.shadowColor = "rgba(255,255,255,0.85)";
+    ctx.strokeStyle = "rgba(255,255,255,0.95)";
+    ctx.lineWidth = 5;
     ctx.lineCap = "round";
     for (let i = -1; i <= 1; i++) {
       ctx.beginPath();
@@ -1045,11 +1404,10 @@ function drawTile(ctx, x, y, size, cell, BLOCK) {
     ctx.restore();
   } else if (cell.special === "stripeV") {
     ctx.save();
-    // Vertical stripe with glow
-    ctx.shadowBlur = 6;
-    ctx.shadowColor = "#fff";
-    ctx.strokeStyle = "#fff";
-    ctx.lineWidth = 4;
+    ctx.shadowBlur = 8;
+    ctx.shadowColor = "rgba(255,255,255,0.85)";
+    ctx.strokeStyle = "rgba(255,255,255,0.95)";
+    ctx.lineWidth = 5;
     ctx.lineCap = "round";
     for (let i = -1; i <= 1; i++) {
       ctx.beginPath();
@@ -1060,22 +1418,20 @@ function drawTile(ctx, x, y, size, cell, BLOCK) {
     ctx.restore();
   } else if (cell.special === "bomb") {
     ctx.save();
-    // Playful bomb with pulsing effect
-    const bombSize = size * 0.2;
+    const bombSize = size * 0.22;
     const bombGrad = ctx.createRadialGradient(cx, cy, 0, cx, cy, bombSize);
-    bombGrad.addColorStop(0, "#fff");
-    bombGrad.addColorStop(0.5, "#FFD700");
-    bombGrad.addColorStop(1, "#FF6347");
+    bombGrad.addColorStop(0, "#ffffff");
+    bombGrad.addColorStop(0.45, paletteEntry.accent);
+    bombGrad.addColorStop(1, paletteEntry.bottom);
     ctx.fillStyle = bombGrad;
-    ctx.shadowBlur = 8;
-    ctx.shadowColor = "#FFD700";
+    ctx.shadowBlur = 10;
+    ctx.shadowColor = paletteEntry.glow;
     ctx.beginPath();
     ctx.arc(cx, cy, bombSize, 0, Math.PI * 2);
     ctx.fill();
-    // Inner sparkle
-    ctx.fillStyle = "#fff";
+    ctx.fillStyle = "rgba(255,255,255,0.9)";
     ctx.beginPath();
-    ctx.arc(cx, cy, bombSize * 0.4, 0, Math.PI * 2);
+    ctx.arc(cx - bombSize * 0.3, cy - bombSize * 0.3, bombSize * 0.35, 0, Math.PI * 2);
     ctx.fill();
     ctx.restore();
   }
