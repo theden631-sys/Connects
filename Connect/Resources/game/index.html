@@ -817,6 +817,46 @@ function Match3CanvasGame() {
     height: "100%",
   };
 
+  const handleNewGameTap = (event) => {
+    if (event) {
+      if (typeof event.preventDefault === "function") event.preventDefault();
+      if (typeof event.stopPropagation === "function") event.stopPropagation();
+    }
+    newGame(levelIndex);
+  };
+
+  const buttonStyle = {
+    position: "absolute",
+    right: 24,
+    bottom: 24,
+    padding: "12px 22px",
+    borderRadius: 999,
+    border: "none",
+    fontSize: "16px",
+    fontWeight: 700,
+    color: "#06152a",
+    background: "linear-gradient(135deg, #7ee0ff 0%, #5fb1ff 45%, #9f94ff 100%)",
+    boxShadow: "0 14px 28px rgba(4, 16, 32, 0.35), 0 0 0 2px rgba(255, 255, 255, 0.18)",
+    cursor: "pointer",
+    letterSpacing: 0.3,
+    transition: "transform 0.18s ease, box-shadow 0.18s ease",
+    zIndex: 20,
+  };
+
+  const newGameButton = React.createElement(
+    "button",
+    {
+      type: "button",
+      onClick: handleNewGameTap,
+      style: buttonStyle,
+      onMouseDown: (event) => event.stopPropagation(),
+      onTouchStart: (event) => {
+        if (event && typeof event.stopPropagation === "function") event.stopPropagation();
+      },
+    },
+    moves > 0 ? "New Game" : "Play Again"
+  );
+
   const overlay = !canPlay
     ? React.createElement(
         "div",
@@ -854,7 +894,7 @@ function Match3CanvasGame() {
           React.createElement(
             "div",
             { style: { fontSize: "14px", opacity: 0.9 } },
-            "Use New Game button to play again."
+            "Tap New Game to play again."
           )
         )
       )
@@ -872,6 +912,7 @@ function Match3CanvasGame() {
     "div",
     { style: containerStyle },
     overlay,
+    newGameButton,
     React.createElement("canvas", {
       ref: canvasRef,
       onMouseDown,
