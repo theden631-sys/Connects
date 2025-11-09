@@ -4,10 +4,33 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1" />
   <title>Connections</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Baloo+2:wght@500;700&display=swap" rel="stylesheet" />
   <style>
-    html,body,#root { height:100%; margin:0; background: transparent; }
-    body { -webkit-font-smoothing: antialiased; font-family: -apple-system, system-ui, "Segoe UI", Roboto, sans-serif; }
-    canvas { background: #000; border-radius: 22px; box-shadow: 0 10px 30px rgba(0,0,0,.35); }
+    html, body { height: 100%; }
+    body {
+      margin: 0;
+      background: radial-gradient(circle at top, #ffe7ff 0%, #f9f1ff 35%, #f5fbff 70%, #e8f5ff 100%);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      -webkit-font-smoothing: antialiased;
+      font-family: "Baloo 2", -apple-system, system-ui, "Segoe UI", Roboto, sans-serif;
+      color: #2b0b4b;
+    }
+    #root {
+      width: 100%;
+      height: 100%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    canvas {
+      background: radial-gradient(circle at 20% 15%, rgba(255,255,255,0.9), rgba(255,255,255,0));
+      border-radius: 28px;
+      box-shadow: 0 25px 50px rgba(47, 20, 87, 0.35), 0 0 0 6px rgba(255,255,255,0.45);
+    }
   </style>
 </head>
 <body>
@@ -173,20 +196,55 @@ function Match3CanvasGame() {
     if (!ctx) return;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
-    // background (brighter & relaxing)
-    const bg = ctx.createLinearGradient(0, 0, dim, dim);
-    bg.addColorStop(0, "#0e2a47");   // deep teal
-    bg.addColorStop(1, "#1b2f66");   // indigo-teal mix
+    // background (cotton-candy sky)
+    const bg = ctx.createLinearGradient(0, 0, 0, dim);
+    bg.addColorStop(0, "#fff9ff");
+    bg.addColorStop(0.45, "#ffe5ff");
+    bg.addColorStop(0.85, "#ffd8f6");
+    bg.addColorStop(1, "#ffd1ec");
     ctx.fillStyle = bg;
     ctx.fillRect(0, 0, dim, dim);
 
+    // floating bubbles for playful depth
+    const bubbles = [
+      { x: dim * 0.18, y: dim * 0.22, r: dim * 0.18, alpha: 0.22 },
+      { x: dim * 0.82, y: dim * 0.18, r: dim * 0.14, alpha: 0.2 },
+      { x: dim * 0.25, y: dim * 0.72, r: dim * 0.16, alpha: 0.18 },
+      { x: dim * 0.78, y: dim * 0.68, r: dim * 0.22, alpha: 0.16 }
+    ];
+    bubbles.forEach(({ x, y, r, alpha }) => {
+      const g = ctx.createRadialGradient(x, y, r * 0.1, x, y, r);
+      g.addColorStop(0, `rgba(255, 255, 255, ${alpha})`);
+      g.addColorStop(0.6, `rgba(255, 255, 255, ${alpha * 0.45})`);
+      g.addColorStop(1, "rgba(255, 255, 255, 0)");
+      ctx.fillStyle = g;
+      ctx.beginPath();
+      ctx.arc(x, y, r, 0, Math.PI * 2);
+      ctx.fill();
+    });
+
     // board panel
-    roundRect(ctx, PADDING - 6, PADDING - 6, size * TILE + 12, size * TILE + 12, 18);
-    const panel = ctx.createLinearGradient(PADDING, PADDING, PADDING + size * TILE, PADDING + size * TILE);
-    panel.addColorStop(0, "rgba(19, 38, 74, 0.85)");
-    panel.addColorStop(1, "rgba(19, 54, 96, 0.85)");
+    ctx.save();
+    ctx.shadowColor = "rgba(255, 163, 227, 0.35)";
+    ctx.shadowBlur = 32;
+    ctx.shadowOffsetY = 8;
+    const panelX = PADDING - 8;
+    const panelY = PADDING - 8;
+    const panelW = size * TILE + 16;
+    const panelH = size * TILE + 16;
+    roundRect(ctx, panelX, panelY, panelW, panelH, 26);
+    const panel = ctx.createLinearGradient(panelX, panelY, panelX, panelY + panelH);
+    panel.addColorStop(0, "rgba(255, 255, 255, 0.92)");
+    panel.addColorStop(0.5, "rgba(255, 220, 255, 0.9)");
+    panel.addColorStop(1, "rgba(255, 206, 239, 0.94)");
     ctx.fillStyle = panel;
     ctx.fill();
+    ctx.shadowBlur = 0;
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = "rgba(255, 255, 255, 0.8)";
+    roundRect(ctx, panelX + 2, panelY + 2, panelW - 4, panelH - 4, 24);
+    ctx.stroke();
+    ctx.restore();
 
     // HUD
     drawHUD(ctx, score, moves, best, dim);
@@ -216,14 +274,21 @@ function Match3CanvasGame() {
 
     // hint overlay
     if (hintCells && hintCells.size > 0) {
+      const phase = (tick % 120) / 120;
+      const glow = 0.45 + 0.35 * Math.sin(phase * Math.PI * 2);
       ctx.save();
-      ctx.strokeStyle = "#34d399"; // mint-teal hint
-      ctx.lineWidth = 4;
+      ctx.globalCompositeOperation = "lighter";
+      ctx.lineWidth = 3.5;
+      ctx.strokeStyle = `rgba(255,255,255,${0.55 + glow * 0.4})`;
+      ctx.shadowColor = `rgba(255,255,255,${0.35 + glow * 0.6})`;
+      ctx.shadowBlur = 14 + glow * 14;
+      ctx.shadowOffsetX = 0;
+      ctx.shadowOffsetY = 0;
       for (const k of hintCells) {
         const [r, c] = unkey(k);
         const x = PADDING + c * TILE;
         const y = PADDING + r * TILE;
-        roundRect(ctx, x + 2, y + 2, TILE - 4, TILE - 4, 12);
+        roundRect(ctx, x + 1.5, y + 1.5, TILE - 3, TILE - 3, 13);
         ctx.stroke();
       }
       ctx.restore();
@@ -872,23 +937,46 @@ function roundRect(ctx, x, y, w, h, r) {
 
 function drawHUD(ctx, score, moves, best, dim) {
   ctx.save();
-  // top bar
-  ctx.globalAlpha = 0.9;
-  roundRect(ctx, 12, 10, dim - 24, 36, 10);
-  const lg = ctx.createLinearGradient(12, 10, dim - 12, 46);
-  lg.addColorStop(0, "rgba(21, 56, 104, 0.85)");
-  lg.addColorStop(1, "rgba(14, 41, 90, 0.85)");
-  ctx.fillStyle = lg; ctx.fill();
+  const barX = 24;
+  const barY = 18;
+  const barH = 56;
+  const barW = dim - barX * 2;
+  ctx.globalAlpha = 0.98;
+  roundRect(ctx, barX, barY, barW, barH, 22);
+  const lg = ctx.createLinearGradient(barX, barY, barX, barY + barH);
+  lg.addColorStop(0, "rgba(255, 242, 255, 0.92)");
+  lg.addColorStop(1, "rgba(255, 205, 244, 0.96)");
+  ctx.fillStyle = lg;
+  ctx.fill();
   ctx.globalAlpha = 1;
-  ctx.fillStyle = "#fff";
-  ctx.font = "600 16px system-ui, -apple-system, Segoe UI, Roboto";
+
+  const itemWidth = barW / 3;
+  const labels = [
+    { label: "Score", value: score },
+    { label: "Best", value: best },
+    { label: "Moves", value: moves }
+  ];
   ctx.textBaseline = "middle";
- // ctx.textAlign = "left";
- // ctx.fillText(`Score: ${score}`, 24, 28);
- // ctx.textAlign = "center";
-//  ctx.fillText(`Best: ${best}`, dim / 2, 28);
- // ctx.textAlign = "right";
-  //ctx.fillText(`Moves: ${moves}`, dim - 24, 28);
+  ctx.textAlign = "center";
+  ctx.font = "600 14px 'Baloo 2', system-ui";
+  labels.forEach((item, idx) => {
+    const itemX = barX + idx * itemWidth;
+    if (idx > 0) {
+      ctx.strokeStyle = "rgba(255, 255, 255, 0.55)";
+      ctx.lineWidth = 1.2;
+      ctx.beginPath();
+      ctx.moveTo(itemX, barY + 10);
+      ctx.lineTo(itemX, barY + barH - 10);
+      ctx.stroke();
+    }
+    const centerX = itemX + itemWidth / 2;
+    ctx.fillStyle = "#9d3fd1";
+    ctx.fillText(item.label, centerX, barY + barH / 2 - 12);
+    ctx.font = "700 20px 'Baloo 2', system-ui";
+    ctx.fillStyle = "#6124a8";
+    ctx.fillText(String(item.value), centerX, barY + barH / 2 + 8);
+    ctx.font = "600 14px 'Baloo 2', system-ui";
+  });
   ctx.restore();
 }
 
@@ -917,124 +1005,131 @@ function randKeys() {
 
 // Sleek, playful tile design with high contrast colors
 function drawTile(ctx, x, y, size, cell, BLOCK) {
-  // High-contrast, distinct color palette - each color is easily distinguishable
   const palette = [
-    "#FF4757",  // Vibrant Red
-    "#2ED573",  // Bright Green
-    "#1E90FF",  // Pure Blue
-    "#FFA502",  // Orange
-    "#5F27CD",  // Purple
-    "#00D2D3"   // Cyan/Turquoise
+    { top: "#ffe9ff", mid: "#ff9be2", bottom: "#ff55b8", accent: "#ffd6f6", glow: "rgba(255, 126, 220, 0.45)" },
+    { top: "#fff3d8", mid: "#ffd072", bottom: "#ffac3f", accent: "#ffeab1", glow: "rgba(255, 186, 99, 0.45)" },
+    { top: "#ddfff6", mid: "#6ff1cf", bottom: "#17d4a9", accent: "#c6fff2", glow: "rgba(86, 232, 189, 0.45)" },
+    { top: "#e6e3ff", mid: "#a998ff", bottom: "#786aff", accent: "#d4ceff", glow: "rgba(142, 126, 255, 0.45)" },
+    { top: "#e0f1ff", mid: "#7bc1ff", bottom: "#3992ff", accent: "#c7e4ff", glow: "rgba(77, 161, 255, 0.45)" },
+    { top: "#ecffe3", mid: "#a8ff78", bottom: "#52dc5e", accent: "#d6ffca", glow: "rgba(116, 234, 112, 0.45)" }
   ];
-  const col = palette[((cell.type % palette.length) + palette.length) % palette.length];
+  const paletteEntry = palette[((cell.type % palette.length) + palette.length) % palette.length];
 
   if (cell.type === BLOCK) {
-    ctx.save(); roundRect(ctx, x + 2, y + 2, size - 4, size - 4, 12);
-    ctx.fillStyle = "#0b1220"; ctx.fill(); ctx.restore(); return;
+    ctx.save();
+    roundRect(ctx, x + 3, y + 3, size - 6, size - 6, 16);
+    const blocked = ctx.createLinearGradient(x, y, x + size, y + size);
+    blocked.addColorStop(0, "#c5b7ff");
+    blocked.addColorStop(1, "#9a8aff");
+    ctx.fillStyle = blocked;
+    ctx.fill();
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = "rgba(255,255,255,0.65)";
+    roundRect(ctx, x + 5, y + 5, size - 10, size - 10, 14);
+    ctx.stroke();
+    ctx.setLineDash([6, 6]);
+    ctx.strokeStyle = "rgba(83, 52, 173, 0.35)";
+    roundRect(ctx, x + 6, y + 6, size - 12, size - 12, 12);
+    ctx.stroke();
+    ctx.restore();
+    return;
   }
 
-  // Sleek rounded tile with gradient background
+  const cx = x + size / 2;
+  const cy = y + size / 2;
+
   ctx.save();
-  roundRect(ctx, x + 2, y + 2, size - 4, size - 4, 14);
-  
-  // Outer glow effect
-  const outerGlow = ctx.createRadialGradient(x + size/2, y + size/2, size * 0.3, x + size/2, y + size/2, size * 0.6);
-  outerGlow.addColorStop(0, col + "40");
-  outerGlow.addColorStop(1, col + "00");
-  ctx.fillStyle = outerGlow;
+  ctx.shadowColor = paletteEntry.glow;
+  ctx.shadowBlur = 18;
+  ctx.shadowOffsetY = 6;
+  const bodyRadius = size * 0.38;
+  roundRect(ctx, x + 2, y + 4, size - 4, size - 6, bodyRadius);
+  const candy = ctx.createLinearGradient(x, y, x, y + size);
+  candy.addColorStop(0, paletteEntry.top);
+  candy.addColorStop(0.45, paletteEntry.mid);
+  candy.addColorStop(1, paletteEntry.bottom);
+  ctx.fillStyle = candy;
   ctx.fill();
-  
-  // Main tile body with gradient
-  roundRect(ctx, x + 3, y + 3, size - 6, size - 6, 12);
-  const g = ctx.createLinearGradient(x, y, x, y + size);
-  g.addColorStop(0, col + "E6");  // Slightly transparent top
-  g.addColorStop(1, col + "CC");  // More transparent bottom
-  ctx.fillStyle = g;
-  ctx.fill();
-  
-  // Bright border
-  ctx.strokeStyle = col;
-  ctx.lineWidth = 2.5;
+  ctx.shadowBlur = 0;
+  ctx.shadowOffsetY = 0;
+  ctx.lineWidth = 2.2;
+  ctx.strokeStyle = "rgba(255,255,255,0.7)";
+  roundRect(ctx, x + 2.5, y + 4.5, size - 5, size - 7, bodyRadius * 0.92);
   ctx.stroke();
   ctx.restore();
 
-  // Playful center shape - rounded square with shine
-  const cx = x + size / 2, cy = y + size / 2;
-  const gemSize = size * 0.5;
+  // glossy highlight swoosh
   ctx.save();
-  
-  // Shine effect
-  roundRect(ctx, cx - gemSize/2, cy - gemSize/2, gemSize, gemSize, gemSize * 0.3);
-  const shineGrad = ctx.createLinearGradient(cx - gemSize/2, cy - gemSize/2, cx + gemSize/2, cy + gemSize/2);
-  shineGrad.addColorStop(0, col);
-  shineGrad.addColorStop(0.5, col + "FF");
-  shineGrad.addColorStop(1, col + "DD");
-  ctx.fillStyle = shineGrad;
+  ctx.globalAlpha = 0.75;
+  ctx.fillStyle = "rgba(255,255,255,0.7)";
+  ctx.beginPath();
+  ctx.ellipse(cx - size * 0.18, y + size * 0.28, size * 0.28, size * 0.18, -0.45, 0, Math.PI * 2);
   ctx.fill();
-  
-  // Inner highlight
-  roundRect(ctx, cx - gemSize/2 + 2, cy - gemSize/2 + 2, gemSize - 4, gemSize - 4, gemSize * 0.25);
-  ctx.fillStyle = "rgba(255,255,255,0.3)";
+  ctx.globalAlpha = 0.5;
+  ctx.beginPath();
+  ctx.ellipse(cx + size * 0.12, y + size * 0.72, size * 0.22, size * 0.14, -0.35, 0, Math.PI * 2);
   ctx.fill();
-  
-  // Border
-  ctx.strokeStyle = "rgba(255,255,255,0.5)";
-  ctx.lineWidth = 1.5;
-  ctx.stroke();
   ctx.restore();
 
-  // Connection arms - sleek lines
-  const armW = Math.max(6, size * 0.18);
-  const reach = size * 0.32;
-  const drawBar = (x1, y1, x2, y2) => {
-    ctx.save();
+  // subtle sprinkle dots
+  ctx.save();
+  ctx.fillStyle = "rgba(255,255,255,0.7)";
+  [[-0.25, -0.05], [0.18, 0.05], [-0.05, 0.25]].forEach(([ox, oy]) => {
     ctx.beginPath();
-    ctx.lineCap = "round";
-    ctx.lineJoin = "round";
-    ctx.strokeStyle = col;
-    ctx.lineWidth = armW;
-    ctx.shadowBlur = 4;
-    ctx.shadowColor = col + "80";
-    ctx.moveTo(x1, y1);
-    ctx.lineTo(x2, y2);
-    ctx.stroke();
-    ctx.restore();
-  };
-  if (cell.keys.u) drawBar(cx, cy, cx, cy - reach);
-  if (cell.keys.d) drawBar(cx, cy, cx, cy + reach);
-  if (cell.keys.l) drawBar(cx, cy, cx - reach, cy);
-  if (cell.keys.r) drawBar(cx, cy, cx + reach, cy);
-
-  // Playful connection indicators - small circles instead of chevrons
-  const indicator = (px, py, sz = size * 0.15) => {
-    ctx.save();
-    ctx.beginPath();
-    ctx.arc(px, py, sz, 0, Math.PI * 2);
-    const indGrad = ctx.createRadialGradient(px, py, 0, px, py, sz);
-    indGrad.addColorStop(0, "#fff");
-    indGrad.addColorStop(1, col);
-    ctx.fillStyle = indGrad;
+    ctx.arc(cx + size * ox, cy + size * oy, size * 0.04, 0, Math.PI * 2);
     ctx.fill();
-    ctx.strokeStyle = "#fff";
-    ctx.lineWidth = 1.5;
-    ctx.stroke();
-    ctx.restore();
-  };
-  const edge = 8;
-  if (cell.keys.u) indicator(cx, y + edge);
-  if (cell.keys.d) indicator(cx, y + size - edge);
-  if (cell.keys.l) indicator(x + edge, cy);
-  if (cell.keys.r) indicator(x + size - edge, cy);
+  });
+  ctx.restore();
+
+  // key notches as soft indents
+  const notchWidth = size * 0.34;
+  const notchDepth = size * 0.18;
+  const notchRadius = Math.min(5, notchDepth * 0.7);
+  ctx.save();
+  const notchFill = ctx.createLinearGradient(0, 0, 0, notchDepth);
+  notchFill.addColorStop(0, "rgba(50, 16, 95, 0.9)");
+  notchFill.addColorStop(1, "rgba(20, 6, 52, 0.85)");
+  ctx.fillStyle = notchFill;
+  if (cell.keys.u) {
+    roundRect(ctx, cx - notchWidth / 2, y + 1.5, notchWidth, notchDepth, notchRadius);
+    ctx.fill();
+  }
+  if (cell.keys.d) {
+    roundRect(ctx, cx - notchWidth / 2, y + size - notchDepth - 1.5, notchWidth, notchDepth, notchRadius);
+    ctx.fill();
+  }
+  if (cell.keys.l) {
+    roundRect(ctx, x + 1.5, cy - notchWidth / 2, notchDepth, notchWidth, notchRadius);
+    ctx.fill();
+  }
+  if (cell.keys.r) {
+    roundRect(ctx, x + size - notchDepth - 1.5, cy - notchWidth / 2, notchDepth, notchWidth, notchRadius);
+    ctx.fill();
+  }
+  ctx.restore();
+
+  // glowing core ring
+  ctx.save();
+  ctx.strokeStyle = "rgba(255,255,255,0.55)";
+  ctx.lineWidth = size * 0.08;
+  ctx.beginPath();
+  ctx.arc(cx, cy, size * 0.28, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.strokeStyle = paletteEntry.accent;
+  ctx.lineWidth = size * 0.03;
+  ctx.beginPath();
+  ctx.arc(cx, cy, size * 0.28, -Math.PI * 0.35, Math.PI * 0.3);
+  ctx.stroke();
+  ctx.restore();
 
   // Specials - enhanced visual effects
   const center = size * 0.5;
   if (cell.special === "stripeH") {
     ctx.save();
-    // Horizontal stripe with glow
-    ctx.shadowBlur = 6;
-    ctx.shadowColor = "#fff";
-    ctx.strokeStyle = "#fff";
-    ctx.lineWidth = 4;
+    ctx.shadowBlur = 8;
+    ctx.shadowColor = "rgba(255,255,255,0.85)";
+    ctx.strokeStyle = "rgba(255,255,255,0.95)";
+    ctx.lineWidth = 5;
     ctx.lineCap = "round";
     for (let i = -1; i <= 1; i++) {
       ctx.beginPath();
@@ -1045,11 +1140,10 @@ function drawTile(ctx, x, y, size, cell, BLOCK) {
     ctx.restore();
   } else if (cell.special === "stripeV") {
     ctx.save();
-    // Vertical stripe with glow
-    ctx.shadowBlur = 6;
-    ctx.shadowColor = "#fff";
-    ctx.strokeStyle = "#fff";
-    ctx.lineWidth = 4;
+    ctx.shadowBlur = 8;
+    ctx.shadowColor = "rgba(255,255,255,0.85)";
+    ctx.strokeStyle = "rgba(255,255,255,0.95)";
+    ctx.lineWidth = 5;
     ctx.lineCap = "round";
     for (let i = -1; i <= 1; i++) {
       ctx.beginPath();
@@ -1060,22 +1154,20 @@ function drawTile(ctx, x, y, size, cell, BLOCK) {
     ctx.restore();
   } else if (cell.special === "bomb") {
     ctx.save();
-    // Playful bomb with pulsing effect
-    const bombSize = size * 0.2;
+    const bombSize = size * 0.22;
     const bombGrad = ctx.createRadialGradient(cx, cy, 0, cx, cy, bombSize);
-    bombGrad.addColorStop(0, "#fff");
-    bombGrad.addColorStop(0.5, "#FFD700");
-    bombGrad.addColorStop(1, "#FF6347");
+    bombGrad.addColorStop(0, "#ffffff");
+    bombGrad.addColorStop(0.45, paletteEntry.accent);
+    bombGrad.addColorStop(1, paletteEntry.bottom);
     ctx.fillStyle = bombGrad;
-    ctx.shadowBlur = 8;
-    ctx.shadowColor = "#FFD700";
+    ctx.shadowBlur = 10;
+    ctx.shadowColor = paletteEntry.glow;
     ctx.beginPath();
     ctx.arc(cx, cy, bombSize, 0, Math.PI * 2);
     ctx.fill();
-    // Inner sparkle
-    ctx.fillStyle = "#fff";
+    ctx.fillStyle = "rgba(255,255,255,0.9)";
     ctx.beginPath();
-    ctx.arc(cx, cy, bombSize * 0.4, 0, Math.PI * 2);
+    ctx.arc(cx - bombSize * 0.3, cy - bombSize * 0.3, bombSize * 0.35, 0, Math.PI * 2);
     ctx.fill();
     ctx.restore();
   }
