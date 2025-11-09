@@ -5,8 +5,23 @@
   <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1" />
   <title>Connections</title>
   <style>
-    html,body,#root { height:100%; margin:0; background: transparent; }
-    body { -webkit-font-smoothing: antialiased; font-family: -apple-system, system-ui, "Segoe UI", Roboto, sans-serif; }
+    html, body { height: 100%; }
+    body {
+      margin: 0;
+      background: transparent;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      -webkit-font-smoothing: antialiased;
+      font-family: -apple-system, system-ui, "Segoe UI", Roboto, sans-serif;
+    }
+    #root {
+      width: 100%;
+      height: 100%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
     canvas { background: #000; border-radius: 22px; box-shadow: 0 10px 30px rgba(0,0,0,.35); }
   </style>
 </head>
@@ -216,14 +231,21 @@ function Match3CanvasGame() {
 
     // hint overlay
     if (hintCells && hintCells.size > 0) {
+      const phase = (tick % 120) / 120;
+      const glow = 0.45 + 0.35 * Math.sin(phase * Math.PI * 2);
       ctx.save();
-      ctx.strokeStyle = "#34d399"; // mint-teal hint
-      ctx.lineWidth = 4;
+      ctx.globalCompositeOperation = "lighter";
+      ctx.lineWidth = 3.5;
+      ctx.strokeStyle = `rgba(255,255,255,${0.55 + glow * 0.4})`;
+      ctx.shadowColor = `rgba(255,255,255,${0.35 + glow * 0.6})`;
+      ctx.shadowBlur = 14 + glow * 14;
+      ctx.shadowOffsetX = 0;
+      ctx.shadowOffsetY = 0;
       for (const k of hintCells) {
         const [r, c] = unkey(k);
         const x = PADDING + c * TILE;
         const y = PADDING + r * TILE;
-        roundRect(ctx, x + 2, y + 2, TILE - 4, TILE - 4, 12);
+        roundRect(ctx, x + 1.5, y + 1.5, TILE - 3, TILE - 3, 13);
         ctx.stroke();
       }
       ctx.restore();
