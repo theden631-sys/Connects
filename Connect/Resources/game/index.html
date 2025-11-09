@@ -454,9 +454,22 @@ function Match3CanvasGame() {
     window.GameAPI = { 
       newGame: (seed) => {
         newGame(levelIndex);
+      },
+      setBestScore: (score) => {
+        if (score > best) {
+          setBest(score);
+          // Send update to Swift
+          try {
+            if (window.webkit?.messageHandlers?.hud) {
+              window.webkit.messageHandlers.hud.postMessage({ score, best: score, moves });
+            }
+          } catch (e) {
+            console.error("Error sending HUD update:", e);
+          }
+        }
       }
     };
-  }, [levelIndex]);
+  }, [levelIndex, best, moves, score]);
 
   // Send HUD updates to Swift whenever values change
   useEffect(() => {

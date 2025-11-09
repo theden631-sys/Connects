@@ -29,6 +29,11 @@ struct WebGameView: UIViewRepresentable {
         // Navigation delegate methods for debugging
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
             print("WebView finished loading")
+            // Set initial best score in the game after it loads
+            if parent.initialBest > 0 {
+                let script = "if (window.GameAPI && window.GameAPI.setBestScore) { window.GameAPI.setBestScore(\(parent.initialBest)); }"
+                webView.evaluateJavaScript(script, completionHandler: nil)
+            }
         }
         
         func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
@@ -42,6 +47,9 @@ struct WebGameView: UIViewRepresentable {
 
     // Callbacks to ContentView
     var onHUD: (_ score: Int, _ best: Int, _ moves: Int) -> Void
+    
+    // Initial best score to set in the game
+    var initialBest: Int = 0
 
     // We keep a reference so ContentView can call JS (e.g., newGame)
     @Binding var webRef: WKWebView?

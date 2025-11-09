@@ -8,6 +8,19 @@ struct ContentView: View {
 
     // Keep the webview so we can call JS (e.g., New Game)
     @State private var webRef: WKWebView?
+    
+    // UserDefaults key for high score
+    private let highScoreKey = "bestScore"
+    
+    // Load high score from UserDefaults
+    private func loadHighScore() -> Int {
+        UserDefaults.standard.integer(forKey: highScoreKey)
+    }
+    
+    // Save high score to UserDefaults
+    private func saveHighScore(_ score: Int) {
+        UserDefaults.standard.set(score, forKey: highScoreKey)
+    }
 
     var body: some View {
         ZStack {
@@ -33,8 +46,16 @@ struct ContentView: View {
                 }
 
                 WebGameView(onHUD: { sc, be, mv in
-                    score = sc; best = be; moves = mv
-                }, webRef: $webRef)
+                    score = sc
+                    moves = mv
+                    // Always use the maximum of game's best and saved high score
+                    let savedHighScore = loadHighScore()
+                    let newBest = max(be, savedHighScore)
+                    if newBest > savedHighScore {
+                        saveHighScore(newBest)
+                    }
+                    best = newBest
+                }, initialBest: best, webRef: $webRef)
                 .frame(width: 420, height: 600)
                 .clipShape(RoundedRectangle(cornerRadius: 22))
                 .shadow(color: Color.black.opacity(0.25), radius: 16, x: 0, y: 8)
@@ -49,6 +70,10 @@ struct ContentView: View {
                 .clipShape(RoundedRectangle(cornerRadius: 14))
             }
             .padding()
+        }
+        .onAppear {
+            // Load saved high score when view appears
+            best = loadHighScore()
         }
     }
 
