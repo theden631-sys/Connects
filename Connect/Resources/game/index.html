@@ -36,12 +36,11 @@
 <body>
   <div id="root"></div>
 
-  <!-- React + Babel (dev friendly). For production, prebuild and drop Babel. -->
+  <!-- React (UMD builds) -->
   <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
   <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
-  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 
-  <script type="text/babel" data-presets="env,react">
+  <script>
 
 // === BEGIN: your working React component (single-file) ===
 // Paste the whole file you currently have open in canvas, exactly as-is.
@@ -58,6 +57,26 @@ const { useEffect, useMemo, useRef, useState } = React;
 let GLOBAL_ID = 1;
 const nextId = () => GLOBAL_ID++;
 const cloneCell = (cell) => ({ ...cell, keys: { ...cell.keys } });
+
+const getHudHandler = () => {
+  if (typeof window === "undefined") return null;
+  const wk = window.webkit;
+  if (!wk || !wk.messageHandlers) return null;
+  const handler = wk.messageHandlers.hud;
+  if (!handler || typeof handler.postMessage !== "function") return null;
+  return handler;
+};
+
+const postHudMessage = (payload) => {
+  try {
+    const handler = getHudHandler();
+    if (handler) {
+      handler.postMessage(payload);
+    }
+  } catch (err) {
+    console.error("Error sending HUD update:", err);
+  }
+};
 
 // Match‑3 Canvas Game – React single‑file (Plain JS, no TypeScript)
 // Features:
@@ -225,13 +244,7 @@ function Match3CanvasGame() {
     setHintCells(null);
     setLastActionAt(Date.now());
     // Send HUD update to Swift
-    try {
-      if (window.webkit?.messageHandlers?.hud) {
-        window.webkit.messageHandlers.hud.postMessage({ score: 0, best: 0, moves: DEFAULT_MOVES });
-      }
-    } catch (e) {
-      console.error("Error sending HUD update:", e);
-    }
+    postHudMessage({ score: 0, best: 0, moves: DEFAULT_MOVES });
   }
 
   // Drawing
@@ -561,7 +574,6 @@ function Match3CanvasGame() {
     setHintCells(null);
     const canvas = canvasRef.current;
     if (!canvas) return;
-    const rect = canvas.getBoundingClientRect();
     // Use logical coordinates (canvas.style dimensions, not canvas.width/height which are scaled by dpr)
     const x = clientX - rect.left;
     const y = clientY - rect.top;
@@ -641,14 +653,7 @@ function Match3CanvasGame() {
     setBoard(swapped);
     setMoves((m) => {
       const newMoves = Math.max(0, m - 1);
-      // Send HUD update to Swift
-      try {
-        if (window.webkit?.messageHandlers?.hud) {
-          window.webkit.messageHandlers.hud.postMessage({ score, best, moves: newMoves });
-        }
-      } catch (e) {
-        console.error("Error sending HUD update:", e);
-      }
+      postHudMessage({ score, best, moves: newMoves });
       return newMoves;
     });
     lastSwapRef.current = { a: { r: r1, c: c1 }, b: { r, c } };
@@ -709,15 +714,11 @@ function Match3CanvasGame() {
       const points = Math.round(toClear.size * 10 * chain);
       setScore((s) => {
         const next = s + points;
-        setBest((b) => Math.max(b, next));
-        // Send HUD update to Swift
-        try {
-          if (window.webkit?.messageHandlers?.hud) {
-            window.webkit.messageHandlers.hud.postMessage({ score: next, best: Math.max(b, next), moves });
-          }
-        } catch (e) {
-          console.error("Error sending HUD update:", e);
-        }
+        setBest((b) => {
+          const updated = Math.max(b, next);
+          postHudMessage({ score: next, best: updated, moves });
+          return updated;
+        });
         return next;
       });
       playMatch(chain);
@@ -755,9 +756,19 @@ function Match3CanvasGame() {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const rect = canvas.getBoundingClientRect();
-    const x = e.clientX !== undefined ? e.clientX : (e.touches?.[0]?.clientX ?? e.changedTouches?.[0]?.clientX);
-    const y = e.clientY !== undefined ? e.clientY : (e.touches?.[0]?.clientY ?? e.changedTouches?.[0]?.clientY);
-    if (x !== undefined && y !== undefined) {
+    let x;
+    let y;
+    if (typeof e.clientX === "number" && typeof e.clientY === "number") {
+      x = e.clientX;
+      y = e.clientY;
+    } else if (e.touches && e.touches.length > 0) {
+      x = e.touches[0].clientX;
+      y = e.touches[0].clientY;
+    } else if (e.changedTouches && e.changedTouches.length > 0) {
+      x = e.changedTouches[0].clientX;
+      y = e.changedTouches[0].clientY;
+    }
+    if (typeof x === "number" && typeof y === "number") {
       handlePointer(x, y);
     }
   };
@@ -768,111 +779,107 @@ function Match3CanvasGame() {
     e.stopPropagation();
     onPointerDown(e);
   };
+  const blockTouch = (e) => {
+    if (!e) return;
+    if (typeof e.preventDefault === "function") e.preventDefault();
+    if (typeof e.stopPropagation === "function") e.stopPropagation();
+  };
 
   const canPlay = moves > 0;
 
   // Expose GameAPI for Swift to call
   useEffect(() => {
-    window.GameAPI = { 
-      newGame: (seed) => {
-        newGame(levelIndex);
-      },
-      setBestScore: (score) => {
-        if (score > best) {
-          setBest(score);
-          // Send update to Swift
-          try {
-            if (window.webkit?.messageHandlers?.hud) {
-              window.webkit.messageHandlers.hud.postMessage({ score, best: score, moves });
-            }
-          } catch (e) {
-            console.error("Error sending HUD update:", e);
-          }
-        }
+    if (typeof window === "undefined") return;
+    if (!window.GameAPI) window.GameAPI = {};
+    window.GameAPI.newGame = function () {
+      newGame(levelIndex);
+    };
+    window.GameAPI.setBestScore = function (value) {
+      const numeric = typeof value === "number" ? value : Number(value || 0);
+      if (numeric > best) {
+        setBest(numeric);
+        postHudMessage({ score: numeric, best: numeric, moves });
       }
     };
-  }, [levelIndex, best, moves, score]);
+  }, [levelIndex, best, moves]);
 
   // Send HUD updates to Swift whenever values change
   useEffect(() => {
-    try {
-      if (window.webkit?.messageHandlers?.hud) {
-        window.webkit.messageHandlers.hud.postMessage({ score, best, moves });
-      }
-    } catch (e) {
-      console.error("Error sending HUD update:", e);
-    }
+    postHudMessage({ score, best, moves });
   }, [score, best, moves]);
 
-  return (
-    <div className="relative flex items-center justify-center w-full h-full">
-      <button
-        type="button"
-        aria-label={soundOn ? "Mute sound" : "Unmute sound"}
-        onClick={() => {
-          setSoundOn((on) => {
-            const next = !on;
-            if (next) ensureAudio();
-            return next;
-          });
-        }}
-        style={{
-          position: 'absolute',
-          top: 24,
-          right: 24,
-          width: 44,
-          height: 44,
-          borderRadius: 14,
-          border: '1px solid rgba(120,160,220,0.35)',
-          background: soundOn
-            ? 'linear-gradient(140deg, rgba(24,60,104,0.95), rgba(12,32,64,0.95))'
-            : 'linear-gradient(140deg, rgba(18,40,70,0.75), rgba(8,22,42,0.75))',
-          color: '#f4f8ff',
-          fontSize: 20,
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          boxShadow: '0 8px 20px rgba(0, 0, 0, 0.35)',
-          cursor: 'pointer',
-          transition: 'transform 0.18s ease, box-shadow 0.18s ease',
-          zIndex: 15
-        }}
-        onMouseDown={(e) => e.stopPropagation()}
-        onTouchStart={(e) => { e.stopPropagation(); }}
-        onMouseEnter={(e) => {
-          e.currentTarget.style.transform = 'scale(1.05)';
-          e.currentTarget.style.boxShadow = '0 10px 24px rgba(0,0,0,0.45)';
-        }}
-        onMouseLeave={(e) => {
-          e.currentTarget.style.transform = 'scale(1)';
-          e.currentTarget.style.boxShadow = '0 8px 20px rgba(0,0,0,0.35)';
-        }}
-      >
-        {soundOn ? '🔊' : '🔈'}
-      </button>
-      {!canPlay && (
-        <div className="absolute inset-0 z-10 flex items-center justify-center">
-          <div className="bg-black/60 backdrop-blur-sm px-6 py-4 rounded-2xl text-center">
-            <div className="text-lg font-semibold mb-1 text-white">Out of moves</div>
-            <div className="text-sm mb-3 text-white">Use New Game button to play again.</div>
-          </div>
-        </div>
-      )}
-      <canvas 
-        ref={canvasRef} 
-        onMouseDown={onMouseDown} 
-        onTouchStart={onTouchStart}
-        onTouchMove={(e) => { e.preventDefault(); e.stopPropagation(); }}
-        onTouchEnd={(e) => { e.preventDefault(); e.stopPropagation(); }}
-        className="rounded-2xl shadow-xl select-none cursor-pointer"
-        style={{ 
-          opacity: canPlay ? 1 : 0.7,
-          touchAction: 'none',
-          userSelect: 'none',
-          WebkitUserSelect: 'none'
-        }}
-      />
-    </div>
+  const containerStyle = {
+    position: "relative",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    width: "100%",
+    height: "100%",
+  };
+
+  const overlay = !canPlay
+    ? React.createElement(
+        "div",
+        {
+          style: {
+            position: "absolute",
+            top: 0,
+            right: 0,
+            bottom: 0,
+            left: 0,
+            zIndex: 10,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+          },
+        },
+        React.createElement(
+          "div",
+          {
+            style: {
+              backgroundColor: "rgba(0, 0, 0, 0.6)",
+              padding: "18px 24px",
+              borderRadius: "20px",
+              textAlign: "center",
+              color: "#ffffff",
+              backdropFilter: "blur(6px)",
+              WebkitBackdropFilter: "blur(6px)",
+            },
+          },
+          React.createElement(
+            "div",
+            { style: { fontSize: "18px", fontWeight: 600, marginBottom: "6px" } },
+            "Out of moves"
+          ),
+          React.createElement(
+            "div",
+            { style: { fontSize: "14px", opacity: 0.9 } },
+            "Use New Game button to play again."
+          )
+        )
+      )
+    : null;
+
+  const canvasStyle = {
+    opacity: canPlay ? 1 : 0.7,
+    touchAction: "none",
+    userSelect: "none",
+    WebkitUserSelect: "none",
+    cursor: "pointer",
+  };
+
+  return React.createElement(
+    "div",
+    { style: containerStyle },
+    overlay,
+    React.createElement("canvas", {
+      ref: canvasRef,
+      onMouseDown,
+      onTouchStart,
+      onTouchMove: blockTouch,
+      onTouchEnd: blockTouch,
+      style: canvasStyle,
+    })
   );
 }
 
@@ -990,6 +997,7 @@ function findMatchGroups(b, BLOCK) {
           if (!inb(rr, cc) || seen[rr][cc]) continue;
           const A = b[cur.r][cur.c];
           const D = b[rr][cc];
+          if (!D) continue;
           if (D.type >= 0 && can(A, D)) {
             seen[rr][cc] = true;
             queue.push({ r: rr, c: cc });
