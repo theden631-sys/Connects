@@ -11,7 +11,7 @@
     html, body { height: 100%; }
     body {
       margin: 0;
-      background: linear-gradient(135deg, #0e2a47 0%, #1b2f66 100%);
+      background: linear-gradient(135deg, #081d36 0%, #0e2642 55%, #132c52 100%);
       display: flex;
       align-items: center;
       justify-content: center;
@@ -267,13 +267,13 @@ function Match3CanvasGame() {
     // hint overlay
     if (hintCells && hintCells.size > 0) {
       const phase = (tick % 120) / 120;
-      const glow = 0.45 + 0.35 * Math.sin(phase * Math.PI * 2);
+      const glow = 0.6 + 0.4 * Math.sin(phase * Math.PI * 2);
       ctx.save();
       ctx.globalCompositeOperation = "lighter";
-      ctx.lineWidth = 3.5;
-      ctx.strokeStyle = `rgba(255,255,255,${0.55 + glow * 0.4})`;
-      ctx.shadowColor = `rgba(255,255,255,${0.35 + glow * 0.6})`;
-      ctx.shadowBlur = 14 + glow * 14;
+      ctx.lineWidth = 4.5;
+      ctx.strokeStyle = `rgba(255,255,255,${0.65 + glow * 0.3})`;
+      ctx.shadowColor = `rgba(255,255,255,${0.5 + glow * 0.5})`;
+      ctx.shadowBlur = 22 + glow * 18;
       ctx.shadowOffsetX = 0;
       ctx.shadowOffsetY = 0;
       for (const k of hintCells) {
@@ -282,6 +282,8 @@ function Match3CanvasGame() {
         const y = PADDING + r * TILE;
         roundRect(ctx, x + 1.5, y + 1.5, TILE - 3, TILE - 3, 13);
         ctx.stroke();
+        ctx.fillStyle = `rgba(255,255,255,${0.08 + glow * 0.08})`;
+        ctx.fill();
       }
       ctx.restore();
     }
@@ -1053,29 +1055,6 @@ function drawTile(ctx, x, y, size, cell, BLOCK) {
   ctx.strokeStyle = "rgba(255,255,255,0.7)";
   roundRect(ctx, x + 2.5, y + 4.5, size - 5, size - 7, bodyRadius * 0.92);
   ctx.stroke();
-  ctx.restore();
-
-  // glossy highlight swoosh
-  ctx.save();
-  ctx.globalAlpha = 0.75;
-  ctx.fillStyle = "rgba(255,255,255,0.7)";
-  ctx.beginPath();
-  ctx.ellipse(cx - size * 0.18, y + size * 0.28, size * 0.28, size * 0.18, -0.45, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.globalAlpha = 0.5;
-  ctx.beginPath();
-  ctx.ellipse(cx + size * 0.12, y + size * 0.72, size * 0.22, size * 0.14, -0.35, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.restore();
-
-  // subtle sprinkle dots
-  ctx.save();
-  ctx.fillStyle = "rgba(255,255,255,0.7)";
-  [[-0.25, -0.05], [0.18, 0.05], [-0.05, 0.25]].forEach(([ox, oy]) => {
-    ctx.beginPath();
-    ctx.arc(cx + size * ox, cy + size * oy, size * 0.04, 0, Math.PI * 2);
-    ctx.fill();
-  });
   ctx.restore();
 
   // key notches as rounded triangular cut-outs
