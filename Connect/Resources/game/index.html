@@ -78,30 +78,6 @@ const postHudMessage = (payload) => {
   }
 };
 
-let GLOBAL_ID = 1;
-const nextId = () => GLOBAL_ID++;
-const cloneCell = (cell) => ({ ...cell, keys: { ...cell.keys } });
-
-const getHudHandler = () => {
-  if (typeof window === "undefined") return null;
-  const wk = window.webkit;
-  if (!wk || !wk.messageHandlers) return null;
-  const handler = wk.messageHandlers.hud;
-  if (!handler || typeof handler.postMessage !== "function") return null;
-  return handler;
-};
-
-const postHudMessage = (payload) => {
-  try {
-    const handler = getHudHandler();
-    if (handler) {
-      handler.postMessage(payload);
-    }
-  } catch (err) {
-    console.error("Error sending HUD update:", err);
-  }
-};
-
 // Match‑3 Canvas Game – React single‑file (Plain JS, no TypeScript)
 // Features:
 // - Stripes (row/col) on 4‑matches; Bombs (3×3) on 5+
@@ -1729,8 +1705,22 @@ function runInternalTests(BLOCK) {
 // === END: your component ===
 
   // Mount
-  const root = ReactDOM.createRoot(document.getElementById('root'));
-  root.render(React.createElement(Match3CanvasGame));
+  (function mountGame() {
+    const container = document.getElementById('root');
+    if (!container) {
+      console.error('Match3: root container missing');
+      return;
+    }
+    if (typeof ReactDOM !== 'undefined' && typeof ReactDOM.createRoot === 'function') {
+      const root = ReactDOM.createRoot(container);
+      root.render(React.createElement(Match3CanvasGame));
+    } else if (typeof ReactDOM !== 'undefined' && typeof ReactDOM.render === 'function') {
+      ReactDOM.render(React.createElement(Match3CanvasGame), container);
+    } else {
+      container.innerHTML = '<div style="color:#fff;padding:24px;text-align:center">Unable to load game. Please ensure the bundled React scripts are available.</div>';
+      console.error('Match3: ReactDOM is unavailable');
+    }
+  })();
   </script>
 </body>
 </html>
