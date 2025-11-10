@@ -36,9 +36,209 @@
 <body>
   <div id="root"></div>
 
-  <!-- React (UMD builds) -->
-  <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
-  <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+  <script>
+    (function () {
+      if (window.React && window.ReactDOM) {
+        return;
+      }
+
+      const hooks = [];
+      let rootElement = null;
+      let rootContainer = null;
+      let renderScheduled = false;
+      let hookCursor = 0;
+      let pendingEffects = [];
+
+      const isEventProp = (name) => /^on[A-Z]/.test(name);
+      const toEventName = (name) => name.slice(2).toLowerCase();
+
+      const depsChanged = (next, prev) => {
+        if (!prev) return true;
+        if (!next) return true;
+        if (next.length !== prev.length) return true;
+        for (let i = 0; i < next.length; i++) {
+          if (!Object.is(next[i], prev[i])) return true;
+        }
+        return false;
+      };
+
+      const scheduleRender = () => {
+        if (renderScheduled) return;
+        renderScheduled = true;
+        Promise.resolve().then(() => {
+          renderScheduled = false;
+          performRender();
+        });
+      };
+
+      const createElement = (type, props, ...children) => {
+        const flat = [];
+        const pushChild = (child) => {
+          if (Array.isArray(child)) {
+            child.forEach(pushChild);
+          } else if (child === null || child === false || child === true) {
+            // ignore
+          } else {
+            flat.push(child);
+          }
+        };
+        children.forEach(pushChild);
+        return { type, props: props || {}, children: flat };
+      };
+
+      const createDom = (vnode) => {
+        if (vnode === null || vnode === false || vnode === true) {
+          return document.createDocumentFragment();
+        }
+        if (typeof vnode === "string" || typeof vnode === "number") {
+          return document.createTextNode(String(vnode));
+        }
+        if (Array.isArray(vnode)) {
+          const frag = document.createDocumentFragment();
+          vnode.forEach((child) => {
+            const dom = createDom(child);
+            if (dom) frag.appendChild(dom);
+          });
+          return frag;
+        }
+        if (typeof vnode.type === "function") {
+          const rendered = vnode.type({ ...(vnode.props || {}), children: vnode.children });
+          return createDom(rendered);
+        }
+        const dom = document.createElement(vnode.type);
+        const props = vnode.props || {};
+        for (const name in props) {
+          if (name === "style" && props.style && typeof props.style === "object") {
+            const style = props.style;
+            for (const key in style) {
+              if (style[key] != null) {
+                dom.style[key] = style[key];
+              }
+            }
+          } else if (name === "ref" && props.ref) {
+            const ref = props.ref;
+            if (typeof ref === "function") {
+              ref(dom);
+            } else if (typeof ref === "object") {
+              ref.current = dom;
+            }
+          } else if (name === "dangerouslySetInnerHTML" && props.dangerouslySetInnerHTML) {
+            dom.innerHTML = props.dangerouslySetInnerHTML.__html || "";
+          } else if (name === "className") {
+            dom.setAttribute("class", props[name]);
+          } else if (isEventProp(name) && typeof props[name] === "function") {
+            dom.addEventListener(toEventName(name), props[name]);
+          } else if (name !== "children" && props[name] != null) {
+            dom.setAttribute(name, props[name]);
+          }
+        }
+        vnode.children.forEach((child) => {
+          const domChild = createDom(child);
+          if (domChild) dom.appendChild(domChild);
+        });
+        return dom;
+      };
+
+      const performRender = () => {
+        if (!rootElement || !rootContainer) return;
+        hookCursor = 0;
+        pendingEffects = [];
+        const tree = renderElement(rootElement);
+        rootContainer.innerHTML = "";
+        const dom = createDom(tree);
+        if (dom) rootContainer.appendChild(dom);
+        const effects = pendingEffects.slice();
+        pendingEffects.length = 0;
+        effects.forEach((run) => run());
+      };
+
+      const renderElement = (element) => {
+        if (typeof element.type === "function") {
+          return element.type({ ...(element.props || {}), children: element.children });
+        }
+        return element;
+      };
+
+      const useState = (initialValue) => {
+        const index = hookCursor++;
+        if (!hooks[index] || hooks[index].kind !== "state") {
+          const value = typeof initialValue === "function" ? initialValue() : initialValue;
+          hooks[index] = { kind: "state", value };
+        }
+        const setState = (nextValue) => {
+          const hook = hooks[index];
+          const next = typeof nextValue === "function" ? nextValue(hook.value) : nextValue;
+          if (!Object.is(next, hook.value)) {
+            hook.value = next;
+            scheduleRender();
+          }
+        };
+        hooks[index].setState = setState;
+        return [hooks[index].value, setState];
+      };
+
+      const useRef = (initialValue) => {
+        const index = hookCursor++;
+        if (!hooks[index] || hooks[index].kind !== "ref") {
+          hooks[index] = { kind: "ref", value: { current: initialValue } };
+        }
+        return hooks[index].value;
+      };
+
+      const useMemo = (factory, deps) => {
+        const index = hookCursor++;
+        const hook = hooks[index];
+        if (!hook || hook.kind !== "memo" || depsChanged(deps, hook.deps)) {
+          const value = factory();
+          hooks[index] = { kind: "memo", value, deps };
+          return value;
+        }
+        return hook.value;
+      };
+
+      const useCallback = (fn, deps) => useMemo(() => fn, deps);
+
+      const useEffect = (effect, deps) => {
+        const index = hookCursor++;
+        const hook = hooks[index];
+        const shouldRun = !hook || hook.kind !== "effect" || depsChanged(deps, hook.deps);
+        if (!hook || hook.kind !== "effect") {
+          hooks[index] = { kind: "effect", deps, cleanup: null };
+        } else {
+          hooks[index].deps = deps;
+        }
+        if (shouldRun) {
+          const previous = hook && hook.kind === "effect" ? hook.cleanup : null;
+          pendingEffects.push(() => {
+            if (typeof previous === "function") {
+              try { previous(); } catch (err) { console.error(err); }
+            }
+            const cleanup = effect();
+            hooks[index].cleanup = typeof cleanup === "function" ? cleanup : null;
+          });
+        }
+      };
+
+      const React = { createElement, useState, useEffect, useMemo, useRef, useCallback };
+      const ReactDOM = {
+        createRoot(container) {
+          return {
+            render(element) {
+              rootElement = element;
+              rootContainer = container;
+              performRender();
+            },
+          };
+        },
+        render(element, container) {
+          this.createRoot(container).render(element);
+        },
+      };
+
+      window.React = React;
+      window.ReactDOM = ReactDOM;
+    })();
+  </script>
 
   <script>
 
@@ -52,53 +252,66 @@
 
 /* ---------------- PASTE BELOW THIS LINE ---------------- */
 
-const { useEffect, useMemo, useRef, useState, useCallback } = React;
-
-let GLOBAL_ID = 1;
-const nextId = () => GLOBAL_ID++;
-const cloneCell = (cell) => ({ ...cell, keys: { ...cell.keys } });
-
-const getHudHandler = () => {
-  if (typeof window === "undefined") return null;
-  const wk = window.webkit;
-  if (!wk || !wk.messageHandlers) return null;
-  const handler = wk.messageHandlers.hud;
-  if (!handler || typeof handler.postMessage !== "function") return null;
-  return handler;
-};
-
-const postHudMessage = (payload) => {
-  try {
-    const handler = getHudHandler();
-    if (handler) {
-      handler.postMessage(payload);
+;(function () {
+  if (typeof window === "undefined") return;
+  if (!window.React || !window.ReactDOM) {
+    const fallback = document.getElementById("root");
+    if (fallback) {
+      fallback.innerHTML = '<div style="color:#fff;padding:24px;text-align:center">Unable to load game. Please check your connection and try again.</div>';
     }
-  } catch (err) {
-    console.error("Error sending HUD update:", err);
+    console.error("Match3: React or ReactDOM is unavailable");
+    return;
   }
-};
 
-// Match‑3 Canvas Game – React single‑file (Plain JS, no TypeScript)
-// Features:
-// - Stripes (row/col) on 4‑matches; Bombs (3×3) on 5+
-// - Cascades: gravity + refill until stable
-// - Auto‑shuffle when stuck (no valid moves)
-// - Levels with layout masks (blocked cells) — Checker level removed per request
-// - Color‑blind safe palette (Okabe‑Ito)
-// - Move limit: 25
-// - **Keyed connections**: tiles connect only if facing-side keys align; matches can bend (L/zig‑zag)
-// - Idle hint: after 10s, highlight a valid swap
-// - Internal tests to prevent regressions
+  const React = window.React;
+  const ReactDOM = window.ReactDOM;
+  const { useEffect, useMemo, useRef, useState, useCallback } = React;
 
-// ---------------- Types (JS comments) ----------------
-// SideKeys = { u:boolean, r:boolean, d:boolean, l:boolean }
-// Special  = "none" | "stripeH" | "stripeV" | "bomb"
-// Cell     = { type:number, id:number, special:Special, keys:SideKeys }
-// RC       = { r:number, c:number }
-// Group    = { dir:"row"|"col", cells:RC[] }
-// Level    = { name:string, size:number, mask:(r,c)=>boolean }
+  let GLOBAL_ID = 1;
+  const nextId = () => GLOBAL_ID++;
+  const cloneCell = (cell) => ({ ...cell, keys: { ...cell.keys } });
 
-function Match3CanvasGame() {
+  const getHudHandler = () => {
+    if (typeof window === "undefined") return null;
+    const wk = window.webkit;
+    if (!wk || !wk.messageHandlers) return null;
+    const handler = wk.messageHandlers.hud;
+    if (!handler || typeof handler.postMessage !== "function") return null;
+    return handler;
+  };
+
+  const postHudMessage = (payload) => {
+    try {
+      const handler = getHudHandler();
+      if (handler) {
+        handler.postMessage(payload);
+      }
+    } catch (err) {
+      console.error("Error sending HUD update:", err);
+    }
+  };
+
+  // Match‑3 Canvas Game – React single‑file (Plain JS, no TypeScript)
+  // Features:
+  // - Stripes (row/col) on 4‑matches; Bombs (3×3) on 5+
+  // - Cascades: gravity + refill until stable
+  // - Auto‑shuffle when stuck (no valid moves)
+  // - Levels with layout masks (blocked cells) — Checker level removed per request
+  // - Color‑blind safe palette (Okabe‑Ito)
+  // - Move limit: 25
+  // - **Keyed connections**: tiles connect only if facing-side keys align; matches can bend (L/zig‑zag)
+  // - Idle hint: after 10s, highlight a valid swap
+  // - Internal tests to prevent regressions
+
+  // ---------------- Types (JS comments) ----------------
+  // SideKeys = { u:boolean, r:boolean, d:boolean, l:boolean }
+  // Special  = "none" | "stripeH" | "stripeV" | "bomb"
+  // Cell     = { type:number, id:number, special:Special, keys:SideKeys }
+  // RC       = { r:number, c:number }
+  // Group    = { dir:"row"|"col", cells:RC[] }
+  // Level    = { name:string, size:number, mask:(r,c)=>boolean }
+
+  function Match3CanvasGame() {
   // --- Tunables ---
   const TILE = 48; // px per tile (reduced from 56 to fit better)
   const PADDING = 16; // canvas padding
@@ -833,11 +1046,6 @@ function Match3CanvasGame() {
     if (inputModeRef.current === "touch" || inputModeRef.current === "pointer") {
       inputModeRef.current = null;
     }
-  };
-  const blockTouch = (e) => {
-    if (!e) return;
-    if (typeof e.preventDefault === "function") e.preventDefault();
-    if (typeof e.stopPropagation === "function") e.stopPropagation();
   };
 
   const canPlay = moves > 0;
@@ -1755,16 +1963,17 @@ function runInternalTests(BLOCK) {
       console.error('Match3: root container missing');
       return;
     }
-    if (typeof ReactDOM !== 'undefined' && typeof ReactDOM.createRoot === 'function') {
+    if (ReactDOM && typeof ReactDOM.createRoot === 'function') {
       const root = ReactDOM.createRoot(container);
       root.render(React.createElement(Match3CanvasGame));
-    } else if (typeof ReactDOM !== 'undefined' && typeof ReactDOM.render === 'function') {
+    } else if (ReactDOM && typeof ReactDOM.render === 'function') {
       ReactDOM.render(React.createElement(Match3CanvasGame), container);
     } else {
       container.innerHTML = '<div style="color:#fff;padding:24px;text-align:center">Unable to load game. Please ensure the bundled React scripts are available.</div>';
       console.error('Match3: ReactDOM is unavailable');
     }
   })();
+})();
   </script>
 </body>
 </html>
