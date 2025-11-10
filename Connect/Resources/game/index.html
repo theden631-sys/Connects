@@ -36,9 +36,209 @@
 <body>
   <div id="root"></div>
 
-  <!-- React (UMD builds) -->
-  <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
-  <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+  <script>
+    (function () {
+      if (window.React && window.ReactDOM) {
+        return;
+      }
+
+      const hooks = [];
+      let rootElement = null;
+      let rootContainer = null;
+      let renderScheduled = false;
+      let hookCursor = 0;
+      let pendingEffects = [];
+
+      const isEventProp = (name) => /^on[A-Z]/.test(name);
+      const toEventName = (name) => name.slice(2).toLowerCase();
+
+      const depsChanged = (next, prev) => {
+        if (!prev) return true;
+        if (!next) return true;
+        if (next.length !== prev.length) return true;
+        for (let i = 0; i < next.length; i++) {
+          if (!Object.is(next[i], prev[i])) return true;
+        }
+        return false;
+      };
+
+      const scheduleRender = () => {
+        if (renderScheduled) return;
+        renderScheduled = true;
+        Promise.resolve().then(() => {
+          renderScheduled = false;
+          performRender();
+        });
+      };
+
+      const createElement = (type, props, ...children) => {
+        const flat = [];
+        const pushChild = (child) => {
+          if (Array.isArray(child)) {
+            child.forEach(pushChild);
+          } else if (child === null || child === false || child === true) {
+            // ignore
+          } else {
+            flat.push(child);
+          }
+        };
+        children.forEach(pushChild);
+        return { type, props: props || {}, children: flat };
+      };
+
+      const createDom = (vnode) => {
+        if (vnode === null || vnode === false || vnode === true) {
+          return document.createDocumentFragment();
+        }
+        if (typeof vnode === "string" || typeof vnode === "number") {
+          return document.createTextNode(String(vnode));
+        }
+        if (Array.isArray(vnode)) {
+          const frag = document.createDocumentFragment();
+          vnode.forEach((child) => {
+            const dom = createDom(child);
+            if (dom) frag.appendChild(dom);
+          });
+          return frag;
+        }
+        if (typeof vnode.type === "function") {
+          const rendered = vnode.type({ ...(vnode.props || {}), children: vnode.children });
+          return createDom(rendered);
+        }
+        const dom = document.createElement(vnode.type);
+        const props = vnode.props || {};
+        for (const name in props) {
+          if (name === "style" && props.style && typeof props.style === "object") {
+            const style = props.style;
+            for (const key in style) {
+              if (style[key] != null) {
+                dom.style[key] = style[key];
+              }
+            }
+          } else if (name === "ref" && props.ref) {
+            const ref = props.ref;
+            if (typeof ref === "function") {
+              ref(dom);
+            } else if (typeof ref === "object") {
+              ref.current = dom;
+            }
+          } else if (name === "dangerouslySetInnerHTML" && props.dangerouslySetInnerHTML) {
+            dom.innerHTML = props.dangerouslySetInnerHTML.__html || "";
+          } else if (name === "className") {
+            dom.setAttribute("class", props[name]);
+          } else if (isEventProp(name) && typeof props[name] === "function") {
+            dom.addEventListener(toEventName(name), props[name]);
+          } else if (name !== "children" && props[name] != null) {
+            dom.setAttribute(name, props[name]);
+          }
+        }
+        vnode.children.forEach((child) => {
+          const domChild = createDom(child);
+          if (domChild) dom.appendChild(domChild);
+        });
+        return dom;
+      };
+
+      const performRender = () => {
+        if (!rootElement || !rootContainer) return;
+        hookCursor = 0;
+        pendingEffects = [];
+        const tree = renderElement(rootElement);
+        rootContainer.innerHTML = "";
+        const dom = createDom(tree);
+        if (dom) rootContainer.appendChild(dom);
+        const effects = pendingEffects.slice();
+        pendingEffects.length = 0;
+        effects.forEach((run) => run());
+      };
+
+      const renderElement = (element) => {
+        if (typeof element.type === "function") {
+          return element.type({ ...(element.props || {}), children: element.children });
+        }
+        return element;
+      };
+
+      const useState = (initialValue) => {
+        const index = hookCursor++;
+        if (!hooks[index] || hooks[index].kind !== "state") {
+          const value = typeof initialValue === "function" ? initialValue() : initialValue;
+          hooks[index] = { kind: "state", value };
+        }
+        const setState = (nextValue) => {
+          const hook = hooks[index];
+          const next = typeof nextValue === "function" ? nextValue(hook.value) : nextValue;
+          if (!Object.is(next, hook.value)) {
+            hook.value = next;
+            scheduleRender();
+          }
+        };
+        hooks[index].setState = setState;
+        return [hooks[index].value, setState];
+      };
+
+      const useRef = (initialValue) => {
+        const index = hookCursor++;
+        if (!hooks[index] || hooks[index].kind !== "ref") {
+          hooks[index] = { kind: "ref", value: { current: initialValue } };
+        }
+        return hooks[index].value;
+      };
+
+      const useMemo = (factory, deps) => {
+        const index = hookCursor++;
+        const hook = hooks[index];
+        if (!hook || hook.kind !== "memo" || depsChanged(deps, hook.deps)) {
+          const value = factory();
+          hooks[index] = { kind: "memo", value, deps };
+          return value;
+        }
+        return hook.value;
+      };
+
+      const useCallback = (fn, deps) => useMemo(() => fn, deps);
+
+      const useEffect = (effect, deps) => {
+        const index = hookCursor++;
+        const hook = hooks[index];
+        const shouldRun = !hook || hook.kind !== "effect" || depsChanged(deps, hook.deps);
+        if (!hook || hook.kind !== "effect") {
+          hooks[index] = { kind: "effect", deps, cleanup: null };
+        } else {
+          hooks[index].deps = deps;
+        }
+        if (shouldRun) {
+          const previous = hook && hook.kind === "effect" ? hook.cleanup : null;
+          pendingEffects.push(() => {
+            if (typeof previous === "function") {
+              try { previous(); } catch (err) { console.error(err); }
+            }
+            const cleanup = effect();
+            hooks[index].cleanup = typeof cleanup === "function" ? cleanup : null;
+          });
+        }
+      };
+
+      const React = { createElement, useState, useEffect, useMemo, useRef, useCallback };
+      const ReactDOM = {
+        createRoot(container) {
+          return {
+            render(element) {
+              rootElement = element;
+              rootContainer = container;
+              performRender();
+            },
+          };
+        },
+        render(element, container) {
+          this.createRoot(container).render(element);
+        },
+      };
+
+      window.React = React;
+      window.ReactDOM = ReactDOM;
+    })();
+  </script>
 
   <script>
 
