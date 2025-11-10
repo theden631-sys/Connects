@@ -52,7 +52,31 @@
 
 /* ---------------- PASTE BELOW THIS LINE ---------------- */
 
-const { useEffect, useMemo, useRef, useState } = React;
+const { useEffect, useMemo, useRef, useState, useCallback } = React;
+
+let GLOBAL_ID = 1;
+const nextId = () => GLOBAL_ID++;
+const cloneCell = (cell) => ({ ...cell, keys: { ...cell.keys } });
+
+const getHudHandler = () => {
+  if (typeof window === "undefined") return null;
+  const wk = window.webkit;
+  if (!wk || !wk.messageHandlers) return null;
+  const handler = wk.messageHandlers.hud;
+  if (!handler || typeof handler.postMessage !== "function") return null;
+  return handler;
+};
+
+const postHudMessage = (payload) => {
+  try {
+    const handler = getHudHandler();
+    if (handler) {
+      handler.postMessage(payload);
+    }
+  } catch (err) {
+    console.error("Error sending HUD update:", err);
+  }
+};
 
 let GLOBAL_ID = 1;
 const nextId = () => GLOBAL_ID++;
@@ -131,6 +155,7 @@ function Match3CanvasGame() {
   const [score, setScore] = useState(0);
   const [best, setBest] = useState(0);
   const [board, setBoard] = useState(() => makeFreshBoard(level, TYPES, BLOCK));
+  const boardRef = useRef(board);
   const [selected, setSelected] = useState(null);
   const [busy, setBusy] = useState(false);
   const [justShuffled, setJustShuffled] = useState(false);
@@ -142,6 +167,21 @@ function Match3CanvasGame() {
   // tiny animation clock for playful pulses
   const [tick, setTick] = useState(0);
   const animationsRef = useRef({ swap: null, clears: [], falls: [], spawns: [] });
+  const busyRef = useRef(busy);
+  useEffect(() => {
+    boardRef.current = board;
+  }, [board]);
+  useEffect(() => {
+    busyRef.current = busy;
+  }, [busy]);
+  const commitBoard = useCallback((next) => {
+    boardRef.current = next;
+    setBoard(next);
+  }, []);
+  const setBusyState = useCallback((value) => {
+    busyRef.current = value;
+    setBusy(value);
+  }, []);
   const timeNow = () => (typeof performance !== "undefined" && performance.now ? performance.now() : Date.now());
   useEffect(() => {
     let raf;
@@ -231,15 +271,15 @@ function Match3CanvasGame() {
     if (!isValidBoard(fresh, lvl.size)) {
       console.error("Init produced invalid board; falling back to classic 8x8.");
       const fallback = makeFreshBoard(LEVELS[0], TYPES, BLOCK);
-      setBoard(fallback);
+      commitBoard(fallback);
     } else {
-      setBoard(fresh);
+      commitBoard(fresh);
     }
     setMoves(DEFAULT_MOVES);
     setScore(0);
     setBest(0);
     setSelected(null);
-    setBusy(false);
+    setBusyState(false);
     setJustShuffled(false);
     setHintCells(null);
     setLastActionAt(Date.now());
@@ -538,38 +578,39 @@ function Match3CanvasGame() {
   // Idle hint: after 10s without action, highlight a valid swap (two tiles)
   useEffect(() => {
     const poll = setInterval(() => {
-      if (busy || moves <= 0) { setHintCells(null); return; }
+      if (busyRef.current || moves <= 0) { setHintCells(null); return; }
       const idleFor = Date.now() - lastActionAt;
       if (idleFor >= 10000) {
-        const h = findFirstHint(board, BLOCK);
+        const h = findFirstHint(boardRef.current, BLOCK);
         if (h) setHintCells(new Set([key(h.a.r, h.a.c), key(h.b.r, h.b.c)])); else setHintCells(null);
       } else {
         setHintCells(null);
       }
     }, 500);
     return () => clearInterval(poll);
-  }, [board, busy, moves, lastActionAt]);
+  }, [moves, lastActionAt]);
 
   // Auto-shuffle watcher: whenever board is stable and has no valid moves
   useEffect(() => {
-    if (busy || moves <= 0) return;
+    if (busyRef.current || moves <= 0) return;
     // Avoid shuffling mid-cascade; ensure no matches are present
-    if (findMatchGroups(board, BLOCK).length > 0) return;
-    if (!hasAnyValidMove(board, BLOCK)) {
-      const shuffled = reshuffleBoard(board, TYPES, BLOCK);
+    const snapshot = boardRef.current;
+    if (findMatchGroups(snapshot, BLOCK).length > 0) return;
+    if (!hasAnyValidMove(snapshot, BLOCK)) {
+      const shuffled = reshuffleBoard(snapshot, TYPES, BLOCK);
       setJustShuffled(true);
       playShuffle();
-      setBoard(shuffled);
+      commitBoard(shuffled);
       const t = setTimeout(() => setJustShuffled(false), 500);
       setLastActionAt(Date.now());
       setHintCells(null);
       return () => clearTimeout(t);
     }
-  }, [board, busy, moves]);
+  }, [moves, commitBoard]);
 
   // Pointer (mouse/touch)
   const handlePointer = async (clientX, clientY) => {
-    if (busy) return;
+    if (busyRef.current) return;
     setLastActionAt(Date.now());
     setHintCells(null);
     const canvas = canvasRef.current;
@@ -585,7 +626,8 @@ function Match3CanvasGame() {
       setSelected(null);
       return;
     }
-    const cell = board[r] && board[r][c];
+    const boardSnapshot = boardRef.current;
+    const cell = boardSnapshot[r] && boardSnapshot[r][c];
     if (!cell || cell.type === BLOCK) return;
 
     if (!selected) {
@@ -600,7 +642,7 @@ function Match3CanvasGame() {
     }
 
     // Adjacent & playable swap only
-    const selCell = board[selected.r][selected.c];
+    const selCell = boardSnapshot[selected.r][selected.c];
     if (!selCell || selCell.type === BLOCK || cell.type === BLOCK) {
       setSelected(null);
       return;
@@ -612,13 +654,13 @@ function Match3CanvasGame() {
     }
 
     // Attempt swap
-    setBusy(true);
+    setBusyState(true);
     const r1 = selected.r, c1 = selected.c;
     setSelected(null);
 
-    const tileA = cloneCell(board[r1][c1]);
-    const tileB = cloneCell(board[r][c]);
-    const swapped = swapCloned(board, r1, c1, r, c);
+    const tileA = cloneCell(boardSnapshot[r1][c1]);
+    const tileB = cloneCell(boardSnapshot[r][c]);
+    const swapped = swapCloned(boardSnapshot, r1, c1, r, c);
     const groups = findMatchGroups(swapped, BLOCK);
     if (groups.length === 0) {
       playInvalid();
@@ -632,9 +674,9 @@ function Match3CanvasGame() {
           { cell: tileB, from: { r, c }, to: { r: r1, c: c1 } }
         ]
       };
-      setBoard(board.slice());
+      commitBoard(boardSnapshot.slice());
       await sleep(440);
-      setBusy(false);
+      setBusyState(false);
       return;
     }
 
@@ -650,7 +692,7 @@ function Match3CanvasGame() {
         { cell: tileB, from: { r, c }, to: { r: r1, c: c1 } }
       ]
     };
-    setBoard(swapped);
+    commitBoard(swapped);
     setMoves((m) => {
       const newMoves = Math.max(0, m - 1);
       postHudMessage({ score, best, moves: newMoves });
@@ -667,14 +709,14 @@ function Match3CanvasGame() {
       const shuffled = reshuffleBoard(finalBoard, TYPES, BLOCK);
       setJustShuffled(true);
       playShuffle();
-      setBoard(shuffled);
+      commitBoard(shuffled);
       await sleep(500);
       setJustShuffled(false);
       setLastActionAt(Date.now());
       setHintCells(null);
     }
 
-    setBusy(false);
+    setBusyState(false);
   };
 
   const resolveCascades = async (startBoard) => {
@@ -722,7 +764,7 @@ function Match3CanvasGame() {
         return next;
       });
       playMatch(chain);
-      setBoard(cleared);
+      commitBoard(cleared);
       await sleep(120);
 
       const falling = [];
@@ -732,7 +774,7 @@ function Match3CanvasGame() {
         playCascade();
       }
       cur = gravityBoard;
-      setBoard(cur);
+      commitBoard(cur);
       await sleep(140);
 
       const spawned = [];
@@ -742,7 +784,7 @@ function Match3CanvasGame() {
         playSpawn();
       }
       cur = refilled;
-      setBoard(cur);
+      commitBoard(cur);
       await sleep(120);
     }
     return cur;
@@ -753,9 +795,7 @@ function Match3CanvasGame() {
     e.stopPropagation();
     setLastActionAt(Date.now());
     setHintCells(null);
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const rect = canvas.getBoundingClientRect();
+    if (!canvasRef.current) return;
     let x;
     let y;
     if (typeof e.clientX === "number" && typeof e.clientY === "number") {
@@ -811,10 +851,17 @@ function Match3CanvasGame() {
   const containerStyle = {
     position: "relative",
     display: "flex",
+    flexDirection: "column",
     alignItems: "center",
     justifyContent: "center",
     width: "100%",
     height: "100%",
+    gap: 18,
+  };
+  const stageStyle = {
+    position: "relative",
+    width: logicalWidth,
+    height: logicalHeight,
   };
 
   const handleNewGameTap = (event) => {
@@ -826,9 +873,6 @@ function Match3CanvasGame() {
   };
 
   const buttonStyle = {
-    position: "absolute",
-    bottom: 24,
-    left: "50%",
     padding: "12px 22px",
     borderRadius: 999,
     border: "none",
@@ -837,11 +881,15 @@ function Match3CanvasGame() {
     color: "#06152a",
     background: "linear-gradient(135deg, #7ee0ff 0%, #5fb1ff 45%, #9f94ff 100%)",
     boxShadow: "0 14px 28px rgba(4, 16, 32, 0.35), 0 0 0 2px rgba(255, 255, 255, 0.18)",
-    transform: "translateX(-50%)",
     cursor: "pointer",
     letterSpacing: 0.3,
     transition: "transform 0.18s ease, box-shadow 0.18s ease",
-    zIndex: 20,
+  };
+  const buttonWrapperStyle = {
+    display: "flex",
+    justifyContent: "center",
+    width: logicalWidth,
+    maxWidth: "100%",
   };
 
   const newGameButton = React.createElement(
@@ -907,21 +955,26 @@ function Match3CanvasGame() {
     userSelect: "none",
     WebkitUserSelect: "none",
     cursor: "pointer",
+    display: "block",
   };
 
   return React.createElement(
     "div",
     { style: containerStyle },
-    overlay,
-    newGameButton,
-    React.createElement("canvas", {
-      ref: canvasRef,
-      onMouseDown,
-      onTouchStart,
-      onTouchMove: blockTouch,
-      onTouchEnd: blockTouch,
-      style: canvasStyle,
-    })
+    React.createElement(
+      "div",
+      { style: stageStyle },
+      React.createElement("canvas", {
+        ref: canvasRef,
+        onMouseDown,
+        onTouchStart,
+        onTouchMove: blockTouch,
+        onTouchEnd: blockTouch,
+        style: canvasStyle,
+      }),
+      overlay
+    ),
+    React.createElement("div", { style: buttonWrapperStyle }, newGameButton)
   );
 }
 
