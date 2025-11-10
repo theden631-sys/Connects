@@ -592,7 +592,6 @@ function Match3CanvasGame() {
     setHintCells(null);
     const canvas = canvasRef.current;
     if (!canvas) return;
-    const rect = canvas.getBoundingClientRect();
     // Use logical coordinates (canvas.style dimensions, not canvas.width/height which are scaled by dpr)
     const x = clientX - rect.left;
     const y = clientY - rect.top;
@@ -834,6 +833,11 @@ function Match3CanvasGame() {
     if (inputModeRef.current === "touch" || inputModeRef.current === "pointer") {
       inputModeRef.current = null;
     }
+  };
+  const blockTouch = (e) => {
+    if (!e) return;
+    if (typeof e.preventDefault === "function") e.preventDefault();
+    if (typeof e.stopPropagation === "function") e.stopPropagation();
   };
 
   const canPlay = moves > 0;
