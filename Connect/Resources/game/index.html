@@ -78,6 +78,30 @@ const postHudMessage = (payload) => {
   }
 };
 
+let GLOBAL_ID = 1;
+const nextId = () => GLOBAL_ID++;
+const cloneCell = (cell) => ({ ...cell, keys: { ...cell.keys } });
+
+const getHudHandler = () => {
+  if (typeof window === "undefined") return null;
+  const wk = window.webkit;
+  if (!wk || !wk.messageHandlers) return null;
+  const handler = wk.messageHandlers.hud;
+  if (!handler || typeof handler.postMessage !== "function") return null;
+  return handler;
+};
+
+const postHudMessage = (payload) => {
+  try {
+    const handler = getHudHandler();
+    if (handler) {
+      handler.postMessage(payload);
+    }
+  } catch (err) {
+    console.error("Error sending HUD update:", err);
+  }
+};
+
 // Match‑3 Canvas Game – React single‑file (Plain JS, no TypeScript)
 // Features:
 // - Stripes (row/col) on 4‑matches; Bombs (3×3) on 5+
@@ -591,7 +615,6 @@ function Match3CanvasGame() {
     setHintCells(null);
     const canvas = canvasRef.current;
     if (!canvas) return;
-    const rect = canvas.getBoundingClientRect();
     // Use logical coordinates (canvas.style dimensions, not canvas.width/height which are scaled by dpr)
     const x = clientX - rect.left;
     const y = clientY - rect.top;
