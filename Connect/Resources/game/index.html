@@ -591,7 +591,6 @@ function Match3CanvasGame() {
     setHintCells(null);
     const canvas = canvasRef.current;
     if (!canvas) return;
-    const rect = canvas.getBoundingClientRect();
     // Use logical coordinates (canvas.style dimensions, not canvas.width/height which are scaled by dpr)
     const x = clientX - rect.left;
     const y = clientY - rect.top;
