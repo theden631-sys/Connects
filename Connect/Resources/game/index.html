@@ -1048,6 +1048,43 @@
     }
   };
 
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    const listenerOptions = { passive: false };
+    const pointerDownListener = (event) => onPointerDown(event);
+    const pointerUpListener = () => onPointerUp();
+    const pointerCancelListener = () => onPointerUp();
+    const mouseDownListener = (event) => onMouseDown(event);
+    const mouseUpListener = () => onMouseUp();
+    const touchStartListener = (event) => onTouchStart(event);
+    const touchMoveListener = (event) => blockTouch(event);
+    const touchEndListener = (event) => onTouchEnd(event);
+    const touchCancelListener = (event) => onTouchEnd(event);
+
+    canvas.addEventListener("pointerdown", pointerDownListener, listenerOptions);
+    canvas.addEventListener("pointerup", pointerUpListener, listenerOptions);
+    canvas.addEventListener("pointercancel", pointerCancelListener, listenerOptions);
+    canvas.addEventListener("mousedown", mouseDownListener, listenerOptions);
+    canvas.addEventListener("mouseup", mouseUpListener, listenerOptions);
+    canvas.addEventListener("touchstart", touchStartListener, listenerOptions);
+    canvas.addEventListener("touchmove", touchMoveListener, listenerOptions);
+    canvas.addEventListener("touchend", touchEndListener, listenerOptions);
+    canvas.addEventListener("touchcancel", touchCancelListener, listenerOptions);
+    return () => {
+      canvas.removeEventListener("pointerdown", pointerDownListener, listenerOptions);
+      canvas.removeEventListener("pointerup", pointerUpListener, listenerOptions);
+      canvas.removeEventListener("pointercancel", pointerCancelListener, listenerOptions);
+      canvas.removeEventListener("mousedown", mouseDownListener, listenerOptions);
+      canvas.removeEventListener("mouseup", mouseUpListener, listenerOptions);
+      canvas.removeEventListener("touchstart", touchStartListener, listenerOptions);
+      canvas.removeEventListener("touchmove", touchMoveListener, listenerOptions);
+      canvas.removeEventListener("touchend", touchEndListener, listenerOptions);
+      canvas.removeEventListener("touchcancel", touchCancelListener, listenerOptions);
+    };
+  });
+
   const canPlay = moves > 0;
 
   // Expose GameAPI for Swift to call
@@ -1189,15 +1226,6 @@
       { style: stageStyle },
       React.createElement("canvas", {
         ref: canvasRef,
-        onPointerDown,
-        onPointerUp,
-        onPointerCancel: onPointerUp,
-        onMouseDown,
-        onMouseUp,
-        onTouchStart,
-        onTouchMove: blockTouch,
-        onTouchEnd,
-        onTouchCancel: onTouchEnd,
         style: canvasStyle,
       }),
       overlay
