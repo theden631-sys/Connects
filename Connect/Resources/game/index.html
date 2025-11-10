@@ -827,8 +827,8 @@ function Match3CanvasGame() {
 
   const buttonStyle = {
     position: "absolute",
-    right: 24,
     bottom: 24,
+    left: "50%",
     padding: "12px 22px",
     borderRadius: 999,
     border: "none",
@@ -837,6 +837,7 @@ function Match3CanvasGame() {
     color: "#06152a",
     background: "linear-gradient(135deg, #7ee0ff 0%, #5fb1ff 45%, #9f94ff 100%)",
     boxShadow: "0 14px 28px rgba(4, 16, 32, 0.35), 0 0 0 2px rgba(255, 255, 255, 0.18)",
+    transform: "translateX(-50%)",
     cursor: "pointer",
     letterSpacing: 0.3,
     transition: "transform 0.18s ease, box-shadow 0.18s ease",
@@ -1423,7 +1424,7 @@ function drawTile(ctx, x, y, size, cell, BLOCK) {
   ctx.shadowColor = paletteEntry.glow;
   ctx.shadowBlur = 18;
   ctx.shadowOffsetY = 6;
-  const bodyRadius = size * 0.38;
+  const bodyRadius = size * 0.22;
   roundRect(ctx, x + 2, y + 4, size - 4, size - 6, bodyRadius);
   const candy = ctx.createLinearGradient(x, y, x, y + size);
   candy.addColorStop(0, paletteEntry.top);
@@ -1435,7 +1436,7 @@ function drawTile(ctx, x, y, size, cell, BLOCK) {
   ctx.shadowOffsetY = 0;
   ctx.lineWidth = 2.2;
   ctx.strokeStyle = "rgba(255,255,255,0.7)";
-  roundRect(ctx, x + 2.5, y + 4.5, size - 5, size - 7, bodyRadius * 0.92);
+  roundRect(ctx, x + 2.5, y + 4.5, size - 5, size - 7, bodyRadius * 0.85);
   ctx.stroke();
   ctx.restore();
 
