@@ -144,6 +144,7 @@ function Match3CanvasGame() {
   const [tick, setTick] = useState(0);
   const animationsRef = useRef({ swap: null, clears: [], falls: [], spawns: [] });
   const busyRef = useRef(busy);
+  const inputModeRef = useRef(null);
   useEffect(() => {
     boardRef.current = board;
   }, [board]);
@@ -766,34 +767,72 @@ function Match3CanvasGame() {
     return cur;
   };
 
-  const onPointerDown = (e) => {
-    e.preventDefault();
-    e.stopPropagation();
+  const blockTouch = (e) => {
+    if (!e) return;
+    if (typeof e.preventDefault === "function") e.preventDefault();
+    if (typeof e.stopPropagation === "function") e.stopPropagation();
+  };
+
+  const processPress = (event) => {
+    if (!event) return;
+    blockTouch(event);
     setLastActionAt(Date.now());
     setHintCells(null);
-    if (!canvasRef.current) return;
     let x;
     let y;
-    if (typeof e.clientX === "number" && typeof e.clientY === "number") {
-      x = e.clientX;
-      y = e.clientY;
-    } else if (e.touches && e.touches.length > 0) {
-      x = e.touches[0].clientX;
-      y = e.touches[0].clientY;
-    } else if (e.changedTouches && e.changedTouches.length > 0) {
-      x = e.changedTouches[0].clientX;
-      y = e.changedTouches[0].clientY;
+    if (typeof event.clientX === "number" && typeof event.clientY === "number") {
+      x = event.clientX;
+      y = event.clientY;
+    } else if (event.touches && event.touches.length > 0) {
+      x = event.touches[0].clientX;
+      y = event.touches[0].clientY;
+    } else if (event.changedTouches && event.changedTouches.length > 0) {
+      x = event.changedTouches[0].clientX;
+      y = event.changedTouches[0].clientY;
     }
     if (typeof x === "number" && typeof y === "number") {
       handlePointer(x, y);
     }
   };
-  
-  const onMouseDown = (e) => onPointerDown(e);
-  const onTouchStart = (e) => {
-    e.preventDefault();
-    e.stopPropagation();
-    onPointerDown(e);
+
+  const onPointerDown = (event) => {
+    inputModeRef.current = "pointer";
+    processPress(event);
+  };
+
+  const onPointerUp = () => {
+    if (inputModeRef.current === "pointer") {
+      inputModeRef.current = null;
+    }
+  };
+
+  const onMouseDown = (event) => {
+    if (inputModeRef.current && inputModeRef.current !== "mouse") {
+      if (inputModeRef.current === "pointer") return;
+    }
+    inputModeRef.current = "mouse";
+    processPress(event);
+  };
+
+  const onMouseUp = () => {
+    if (inputModeRef.current === "mouse") {
+      inputModeRef.current = null;
+    }
+  };
+
+  const onTouchStart = (event) => {
+    if (inputModeRef.current && inputModeRef.current !== "touch") {
+      if (inputModeRef.current === "pointer") return;
+    }
+    inputModeRef.current = "touch";
+    processPress(event);
+  };
+
+  const onTouchEnd = (event) => {
+    blockTouch(event);
+    if (inputModeRef.current === "touch" || inputModeRef.current === "pointer") {
+      inputModeRef.current = null;
+    }
   };
   const blockTouch = (e) => {
     if (!e) return;
@@ -942,10 +981,15 @@ function Match3CanvasGame() {
       { style: stageStyle },
       React.createElement("canvas", {
         ref: canvasRef,
+        onPointerDown,
+        onPointerUp,
+        onPointerCancel: onPointerUp,
         onMouseDown,
+        onMouseUp,
         onTouchStart,
         onTouchMove: blockTouch,
-        onTouchEnd: blockTouch,
+        onTouchEnd,
+        onTouchCancel: onTouchEnd,
         style: canvasStyle,
       }),
       overlay
